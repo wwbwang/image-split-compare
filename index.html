@@ -672,7 +672,7 @@
         </div>
       </div>
       <p class="swap-hint" id="swapHint">
-        <kbd>1</kbd> LQ↔A · <kbd>2</kbd> LQ↔B · <kbd>3</kbd> GT↔A · <kbd>4</kbd> GT↔B · <kbd>←</kbd>/<kbd>→</kbd> 上一张/下一张
+        <kbd>1</kbd> A · <kbd>2</kbd> B · <kbd>3</kbd> C · <kbd>4</kbd> D · 每栏循环：原图 → LQ → GT → 原图 · <kbd>←</kbd>/<kbd>→</kbd> 上一张/下一张
       </p>
     </section>
 
@@ -701,6 +701,8 @@
         <div class="image-pane" id="paneC" hidden>
           <div class="pane-label" id="labelC">C</div>
           <img id="imageC" alt="图片 C" />
+          <img id="imageLqC" class="is-hidden" alt="LQ 图片 C" />
+          <img id="imageGtC" class="is-hidden" alt="GT 图片 C" />
           <div class="pane-missing" id="missingC" hidden>当前图片缺失</div>
           <div class="hover-box" id="hoverBoxC"></div>
         </div>
@@ -708,6 +710,8 @@
         <div class="image-pane" id="paneD" hidden>
           <div class="pane-label" id="labelD">D</div>
           <img id="imageD" alt="图片 D" />
+          <img id="imageLqD" class="is-hidden" alt="LQ 图片 D" />
+          <img id="imageGtD" class="is-hidden" alt="GT 图片 D" />
           <div class="pane-missing" id="missingD" hidden>当前图片缺失</div>
           <div class="hover-box" id="hoverBoxD"></div>
         </div>
@@ -792,9 +796,13 @@
     const elementsByKey = (prefix) => Object.fromEntries(paneKeys.map((key) => [key, $(prefix + key)]));
     const panes = elementsByKey("pane");
     const images = {
-      ...elementsByKey("image"),
-      LqA: $("imageLqA"), LqB: $("imageLqB"), GtA: $("imageGtA"), GtB: $("imageGtB")
+      original: elementsByKey("image"),
+      LQ: elementsByKey("imageLq"),
+      GT: elementsByKey("imageGt")
     };
+    const sourceOrder = ["original", "LQ", "GT"];
+    const paneSources = Object.fromEntries(paneKeys.map((key) => [key, "original"]));
+    const imageNodes = sourceOrder.flatMap((source) => Object.values(images[source]));
     const missing = elementsByKey("missing");
     const hoverBoxes = elementsByKey("hoverBox");
     const patchPanes = elementsByKey("patchPane");
@@ -825,16 +833,12 @@
     let pickerVersion = 0;
     let mode = "side";
     let patchMode = "side";
-    let useLqA = false;
-    let useLqB = false;
-    let useGtA = false;
-    let useGtB = false;
     let selection = null;
     let drawing = null;
     let directoryIndexes = null;
     const imageCache = new LocalImageCache({
-      activeKeys: () => new Set(Object.values(images).map((image) => image.dataset.cacheKey).filter(Boolean)),
-      activeURLs: () => new Set(Object.values(images).map((image) => image.src).filter(Boolean)),
+      activeKeys: () => new Set(imageNodes.map((image) => image.dataset.cacheKey).filter(Boolean)),
+      activeURLs: () => new Set(imageNodes.map((image) => image.src).filter(Boolean)),
       onStatus: ({ persistent, count, bytes }) => {
         $("cacheStatus").textContent = `${persistent ? "本机缓存" : "内存缓存"}：${count} 张 · ${formatSize(bytes)}`;
       }
@@ -1100,7 +1104,7 @@
 
     function clearImages() {
       entries = {};
-      for (const image of Object.values(images)) clearImage(image);
+      for (const image of imageNodes) clearImage(image);
       imageCache.cancelUnused();
       render();
     }
@@ -1109,10 +1113,10 @@
       if (!selected[key]) return;
       if (hiddenPanes.has(key)) {
         hiddenPanes.delete(key);
-        setImage(images[key], entries[key], requestVersion);
+        setPaneImages(key, requestVersion);
       } else {
         hiddenPanes.add(key);
-        clearImage(images[key]);
+        for (const source of sourceOrder) clearImage(images[source][key]);
         patchCanvases[key].width = patchCanvases[key].height = 0;
         imageCache.cancelUnused();
       }
@@ -1186,6 +1190,12 @@
       }
     }
 
+    function setPaneImages(key, version) {
+      for (const source of sourceOrder) {
+        setImage(images[source][key], entries[source === "original" ? key : source], version);
+      }
+    }
+
     async function loadCurrent(version = ++requestVersion) {
       const name = files[index];
       if (!name) return;
@@ -1209,11 +1219,7 @@
         directoryKeys.filter((key) => selected[key]).forEach((key, position) => {
           entries[key] = data.images[position];
         });
-        for (const key of visiblePaneKeys()) setImage(images[key], entries[key], version);
-        setImage(images.LqA, entries.LQ, version);
-        setImage(images.LqB, entries.LQ, version);
-        setImage(images.GtA, entries.GT, version);
-        setImage(images.GtB, entries.GT, version);
+        for (const key of visiblePaneKeys()) setPaneImages(key, version);
         render();
       } catch (error) {
         if (version === requestVersion) {
@@ -1247,18 +1253,14 @@
     }
 
     function activeImage(side) {
-      const base = images[side];
-      if (side === "C" || side === "D") return loaded[base.id] ? base : null;
-      const lq = side === "A" ? images.LqA : images.LqB;
-      const gt = side === "A" ? images.GtA : images.GtB;
-      const useLq = side === "A" ? useLqA : useLqB;
-      const useGt = side === "A" ? useGtA : useGtB;
-      if (useGt && loaded[gt.id]) return gt;
-      return useLq && loaded[lq.id] ? lq : loaded[base.id] ? base : null;
+      const preferred = images[paneSources[side]][side];
+      const original = images.original[side];
+      if (loaded[preferred.id]) return preferred;
+      return loaded[original.id] ? original : null;
     }
 
-    function renderInfo(key, image) {
-      const entry = entries[key];
+    function renderInfo(key, image, entryKey = key) {
+      const entry = entries[entryKey];
       const name = files[index];
       $(`info${key}Name`).textContent = !selected[key] ? "—" : name || "—";
       $(`info${key}Res`).textContent = !entry?.exists ? (name && selected[key] ? "缺少同名图片" : "—") : image ? `${image.naturalWidth} × ${image.naturalHeight}` : "加载中…";
@@ -1267,11 +1269,13 @@
     }
 
     function renderPane(side) {
-      const base = images[side];
+      const base = images.original[side];
       const active = activeImage(side);
-      const sources = side === "A" || side === "B" ? [base, images["Lq" + side], images["Gt" + side]] : [base];
-      for (const image of sources) image.classList.toggle("is-hidden", active !== image);
-      const alternate = active && active !== base ? (active.id.startsWith("imageLq") ? "LQ" : "GT") : null;
+      for (const source of sourceOrder) {
+        const image = images[source][side];
+        image.classList.toggle("is-hidden", active !== image);
+      }
+      const alternate = active === images.LQ[side] ? "LQ" : active === images.GT[side] ? "GT" : null;
       const label = alternate ? side + " ← " + alternate : side;
       for (const element of [$("label" + side), patchPanes[side].querySelector(".pane-label")]) {
         element.textContent = label;
@@ -1281,13 +1285,15 @@
       const placeholder = missing[side];
       placeholder.hidden = !!active || index < 0;
       placeholder.textContent = !entry?.exists ? side + " 目录缺少同名图片" : loaded[base.id] === false ? "图片加载失败" : "加载中…";
-      renderInfo(side, active);
+      renderInfo(side, active, alternate || side);
     }
 
     function render() {
       for (const key of visiblePaneKeys()) renderPane(key);
-      renderInfo("LQ", loaded.imageLqA ? images.LqA : null);
-      renderInfo("GT", loaded.imageGtA ? images.GtA : null);
+      for (const source of ["LQ", "GT"]) {
+        const image = images[source].A;
+        renderInfo(source, loaded[image.id] ? image : null);
+      }
       mainView.draw();
       renderSelection();
       renderPatch();
@@ -1377,24 +1383,21 @@
       $("clear" + key).onclick = () => {
         selected[key] = null;
         hiddenPanes.delete(key);
+        paneSources[key] = "original";
         updateDirectoryLabels();
         loadComparison(files[index]);
       };
     }
-    $("clearLQ").onclick = () => {
-      selected.LQ = null;
-      useLqA = false;
-      useLqB = false;
-      updateDirectoryLabels();
-      loadComparison(files[index]);
-    };
-    $("clearGT").onclick = () => {
-      selected.GT = null;
-      useGtA = false;
-      useGtB = false;
-      updateDirectoryLabels();
-      loadComparison(files[index]);
-    };
+    for (const source of ["LQ", "GT"]) {
+      $("clear" + source).onclick = () => {
+        selected[source] = null;
+        for (const key of paneKeys) {
+          if (paneSources[key] === source) paneSources[key] = "original";
+        }
+        updateDirectoryLabels();
+        loadComparison(files[index]);
+      };
+    }
     $("closePicker").onclick = () => picker.close();
     $("jumpPath").onclick = () => browse(new URLSearchParams({ path: $("pickerPath").value.trim() }));
     $("pickerPath").onkeydown = (event) => {
@@ -1425,21 +1428,12 @@
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
         move(event.key === "ArrowLeft" ? -1 : 1);
-      } else if (event.key === "1" && selected.LQ) {
-        useLqA = !useLqA;
-        if (useLqA) useGtA = false;
-        render();
-      } else if (event.key === "2" && selected.LQ) {
-        useLqB = !useLqB;
-        if (useLqB) useGtB = false;
-        render();
-      } else if (event.key === "3" && selected.GT) {
-        useGtA = !useGtA;
-        if (useGtA) useLqA = false;
-        render();
-      } else if (event.key === "4" && selected.GT) {
-        useGtB = !useGtB;
-        if (useGtB) useLqB = false;
+      } else if (!event.repeat && /^[1-4]$/.test(event.key)) {
+        const key = paneKeys[Number(event.key) - 1];
+        if (!selected[key] || hiddenPanes.has(key) || index < 0) return;
+        event.preventDefault();
+        const current = sourceOrder.indexOf(paneSources[key]);
+        paneSources[key] = sourceOrder[(current + 1) % sourceOrder.length];
         render();
       }
     });
