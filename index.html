@@ -324,31 +324,7 @@
     }
 
     .split-hit[data-axis="x"] { cursor: ew-resize; }
-    .split-hit[data-axis="y"] { cursor: ns-resize; }
-
-    .split-handle {
-      display: none;
-      position: absolute;
-      z-index: 6;
-      width: 30px;
-      height: 30px;
-      padding: 0;
-      transform: translate(-50%, -50%);
-      border-radius: 50%;
-      background: rgba(20, 24, 32, 0.9);
-      border: 1px solid rgba(255, 255, 255, 0.35);
-      place-items: center;
-      color: #fff;
-      font-size: 15px;
-      box-shadow: var(--shadow);
-      cursor: move;
-      touch-action: none;
-    }
-
-    .split-handle[data-axis="x"] { cursor: ew-resize; }
-    .split-handle:active { transform: translate(-50%, -50%); }
-    .overlay > .split-lines { display: block; }
-    .overlay > .split-handle { display: grid; }
+    .overlay > .split-lines:not([hidden]) { display: block; }
 
 
     .hover-box {
@@ -622,7 +598,7 @@
   <header>
     <div>
       <h1>Image Split Compare</h1>
-      <p class="subtitle">选择 A、B 开始对比，可加 C、D · 拖动分割线或交点 · 拖拽框选 Patch · <kbd>←</kbd>/<kbd>→</kbd> 切图</p>
+      <p class="subtitle">选择 A、B 开始对比，可加 C、D · 拖动分割线 · 拖拽框选 Patch · <kbd>←</kbd>/<kbd>→</kbd> 切图</p>
     </div>
     <div class="toolbar">
       <button class="file-btn" id="chooseA">选择目录 A</button>
@@ -734,8 +710,7 @@
           <div class="hover-box" id="hoverBoxD"></div>
         </div>
 
-        <svg class="split-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
-        <button type="button" class="split-handle" title="拖动分割交点或用方向键微调" aria-label="移动主图分割线">↔</button>
+        <svg class="split-lines" viewBox="0 0 100 100" preserveAspectRatio="none" role="group" aria-label="主图分割线，可用方向键移动" tabindex="0"></svg>
       </div>
     </section>
 
@@ -786,8 +761,7 @@
           <canvas class="patch" id="patchD" width="0" height="0"></canvas>
           <div class="patch-hint" id="hintD">拖拽框选 patch</div>
         </div>
-        <svg class="split-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
-        <button type="button" class="split-handle" title="拖动分割交点或用方向键微调" aria-label="移动 Patch 分割线">↔</button>
+        <svg class="split-lines" viewBox="0 0 100 100" preserveAspectRatio="none" role="group" aria-label="Patch 分割线，可用方向键移动" tabindex="0"></svg>
       </div>
     </section>
   </div>
@@ -828,8 +802,14 @@
     const directoryKeys = [...paneKeys, "LQ", "GT"];
     const selected = Object.fromEntries(directoryKeys.map((key) => [key, null]));
     const visiblePaneKeys = () => paneKeys.filter((key) => key === "A" || key === "B" || selected[key]);
-    const mainView = createComparisonView(stage, panes);
-    const patchView = createComparisonView(patchStage, patchPanes);
+    const mainView = createComparisonView(stage, panes, (key) => {
+      const image = activeImage(key);
+      return image ? [image.naturalWidth, image.naturalHeight] : null;
+    });
+    const patchView = createComparisonView(patchStage, patchPanes, (key) => {
+      const { width, height } = patchCanvases[key];
+      return width && height ? [width, height] : null;
+    });
     let files = [];
     let index = -1;
     let entries = {};
@@ -855,27 +835,27 @@
       }
     });
 
-    // Coordinates are percentages of the shared stage. The rays are 120° apart on screen.
-    function comparisonRegions(count, x, y, aspect) {
+    // Panes cover the stage; draggable lines stop at the shared image bounds.
+    function comparisonRegions(count, x, y, aspect, { left, top, right, bottom }) {
       const rect = (left, top, right, bottom) => [[left, top], [right, top], [right, bottom], [left, bottom]];
-      const vertical = { start: [x, 0], end: [x, 100], axis: "x" };
+      const vertical = { start: [x, top], end: [x, bottom] };
       if (count === 2) return {
         polygons: [rect(0, 0, x, 100), rect(x, 0, 100, 100)],
         lines: [vertical], corners: ["top-left", "top-right"]
       };
       if (count === 4) return {
         polygons: [rect(0, 0, x, y), rect(x, 0, 100, y), rect(0, y, x, 100), rect(x, y, 100, 100)],
-        lines: [vertical, { start: [0, y], end: [100, y], axis: "y" }],
+        lines: [vertical, { start: [left, y], end: [right, y] }],
         corners: ["top-left", "top-right", "bottom-left", "bottom-right"]
       };
 
       const dx = Math.sqrt(3) / aspect;
       const rays = [[0, -1], [dx, 1], [-dx, 1]];
       const lines = rays.map(([u, v]) => {
-        const tx = u === 0 ? Infinity : ((u > 0 ? 100 : 0) - x) / u;
-        const ty = ((v > 0 ? 100 : 0) - y) / v;
+        const tx = u === 0 ? Infinity : ((u > 0 ? right : left) - x) / u;
+        const ty = ((v > 0 ? bottom : top) - y) / v;
         const t = Math.min(tx, ty);
-        return { start: [x, y], end: [x + t * u, y + t * v], axis: "both" };
+        return { start: [x, y], end: [x + t * u, y + t * v] };
       });
       // Clip the stage by the two half planes defining each sector.
       function clip(polygon, distance) {
@@ -900,9 +880,13 @@
       return { polygons, lines, corners: ["top-left", "top-right", "bottom-center"] };
     }
 
-    function createComparisonView(viewport, panels) {
+    function containSize(width, height, imageWidth, imageHeight) {
+      const scale = Math.min(width / imageWidth, height / imageHeight);
+      return { width: imageWidth * scale, height: imageHeight * scale };
+    }
+
+    function createComparisonView(viewport, panels, imageDimensions) {
       const layer = viewport.querySelector(".split-lines");
-      const handle = viewport.querySelector(".split-handle");
       const svgNS = "http://www.w3.org/2000/svg";
       const paths = Array.from({ length: 3 }, () => {
         const line = document.createElementNS(svgNS, "path");
@@ -918,6 +902,7 @@
       let x = 50;
       let y = 50;
       let drag = null;
+      let imageArea = null;
       const limit = (value) => Math.max(keys.length === 2 ? 0 : 2, Math.min(keys.length === 2 ? 100 : 98, value));
       const percent = (value) => value.toFixed(5) + "%";
 
@@ -925,9 +910,23 @@
         if (layout !== "overlay") return;
         x = limit(x);
         y = limit(y);
-        const aspect = (viewport.clientWidth || 1) / (viewport.clientHeight || 1);
-        const { polygons, lines, corners } = comparisonRegions(keys.length, x, y, aspect);
-        viewport.style.setProperty("--junction-x", percent(x));
+        const width = viewport.clientWidth || 1;
+        const height = viewport.clientHeight || 1;
+        const fitted = keys.map(imageDimensions).filter(Boolean).map(([w, h]) => containSize(width, height, w, h));
+        // All images are centered. The intersection keeps lines inside every loaded image.
+        imageArea = fitted.length ? {
+          width: Math.min(...fitted.map((size) => size.width)),
+          height: Math.min(...fitted.map((size) => size.height))
+        } : null;
+        const marginX = imageArea ? (1 - imageArea.width / width) * 50 : 0;
+        const marginY = imageArea ? (1 - imageArea.height / height) * 50 : 0;
+        const bounds = { left: marginX, top: marginY, right: 100 - marginX, bottom: 100 - marginY };
+        const splitX = bounds.left + x / 100 * (bounds.right - bounds.left);
+        const splitY = bounds.top + y / 100 * (bounds.bottom - bounds.top);
+        const { polygons, lines, corners } = comparisonRegions(keys.length, splitX, splitY, width / height, bounds);
+        layer.toggleAttribute("hidden", !imageArea);
+        layer.style.clipPath = "inset(" + percent(marginY) + " " + percent(marginX) + ")";
+        viewport.style.setProperty("--junction-x", percent(splitX));
         for (const [i, key] of keys.entries()) {
           const panel = panels[key];
           const polygon = polygons[i];
@@ -942,12 +941,8 @@
             path.style.display = segment ? "" : "none";
             if (segment) path.setAttribute("d", "M " + segment.start.join(" ") + " L " + segment.end.join(" "));
           }
-          if (segment) hit.dataset.axis = segment.axis;
+          if (segment) hit.dataset.axis = keys.length === 2 ? "x" : "both";
         });
-        handle.dataset.axis = keys.length === 2 ? "x" : "both";
-        handle.style.left = percent(x);
-        handle.style.top = percent(keys.length === 2 ? 50 : y);
-        handle.textContent = keys.length === 2 ? "↔" : "✥";
       }
 
       function update(value, visibleKeys) {
@@ -966,18 +961,17 @@
 
       function startDrag(event) {
         const axis = event.target.dataset.axis;
-        if (!axis || event.button !== 0 || drag) return;
+        if (!axis || event.button !== 0 || drag || !imageArea) return;
         event.preventDefault();
         event.stopPropagation();
-        drag = { id: event.pointerId, axis, x, y, left: event.clientX, top: event.clientY };
+        drag = { id: event.pointerId, axis, x, y, left: event.clientX, top: event.clientY, ...imageArea };
         viewport.setPointerCapture(event.pointerId);
       }
       layer.addEventListener("pointerdown", startDrag);
-      handle.addEventListener("pointerdown", startDrag);
       viewport.addEventListener("pointermove", (event) => {
         if (event.pointerId !== drag?.id) return;
-        if (drag.axis !== "y") x = drag.x + 100 * (event.clientX - drag.left) / viewport.clientWidth;
-        if (drag.axis !== "x") y = drag.y + 100 * (event.clientY - drag.top) / viewport.clientHeight;
+        x = drag.x + 100 * (event.clientX - drag.left) / drag.width;
+        if (drag.axis !== "x") y = drag.y + 100 * (event.clientY - drag.top) / drag.height;
         draw();
       });
       for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
@@ -985,7 +979,7 @@
           if (event.pointerId === drag?.id) drag = null;
         });
       }
-      handle.addEventListener("keydown", (event) => {
+      layer.addEventListener("keydown", (event) => {
         if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
         event.preventDefault();
         event.stopPropagation();
@@ -997,7 +991,7 @@
         draw();
       });
       new ResizeObserver(draw).observe(viewport);
-      return { update };
+      return { update, draw };
     }
 
 
@@ -1259,8 +1253,10 @@
       for (const key of visiblePaneKeys()) renderPane(key);
       renderInfo("LQ", loaded.imageLqA ? images.LqA : null);
       renderInfo("GT", loaded.imageGtA ? images.GtA : null);
+      mainView.draw();
       renderSelection();
       renderPatch();
+      patchView.draw();
     }
 
     function setMode(value) {
@@ -1282,9 +1278,7 @@
       const image = activeImage(side);
       if (!image) return null;
       const pane = panes[side].getBoundingClientRect();
-      const scale = Math.min(pane.width / image.naturalWidth, pane.height / image.naturalHeight);
-      const width = image.naturalWidth * scale;
-      const height = image.naturalHeight * scale;
+      const { width, height } = containSize(pane.width, pane.height, image.naturalWidth, image.naturalHeight);
       return { left: pane.left + (pane.width - width) / 2, top: pane.top + (pane.height - height) / 2, width, height, pane };
     }
 
