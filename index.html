@@ -1,0 +1,1478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>多图对比 · Image Compare</title>
+  <style>
+    :root {
+      --bg: #0e1116;
+      --panel: #171b22;
+      --panel-2: #1e2430;
+      --border: #2a3342;
+      --text: #e8edf5;
+      --muted: #8b97a8;
+      --accent: #3d9cf0;
+      --accent-2: #2dd4a8;
+      --danger: #f07178;
+      --shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+      --radius: 12px;
+      --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a2740 0%, transparent 55%),
+        radial-gradient(900px 500px at 90% 0%, #12281f 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+    }
+
+    body {
+      padding: 12px 16px 28px;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+    }
+
+    .subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .layout {
+      display: grid;
+      gap: 10px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .file-btn, button, .select-wrap {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 8px 14px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: border-color .15s, background .15s, transform .1s;
+    }
+
+    .file-btn:hover, button:hover {
+      border-color: var(--accent);
+      background: var(--panel-2);
+    }
+
+    button:active { transform: translateY(1px); }
+
+    button.primary {
+      background: linear-gradient(180deg, #3d9cf0, #2f7fc7);
+      border-color: transparent;
+      color: white;
+      font-weight: 600;
+    }
+
+    button.primary:hover { filter: brightness(1.05); }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .file-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      max-width: 150px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-label.error { color: var(--danger); }
+
+    dialog {
+      width: min(900px, calc(100vw - 32px));
+      max-height: min(760px, calc(100vh - 32px));
+      padding: 0;
+      overflow: hidden;
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    dialog::backdrop { background: rgba(0, 0, 0, 0.72); }
+
+    .picker-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .picker-head h2 { margin: 0; font-size: 1rem; }
+
+    .picker-tools {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .picker-search {
+      width: 100%;
+      padding: 9px 12px;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      outline: none;
+    }
+
+    .picker-search:focus { border-color: var(--accent); }
+
+    .picker-status {
+      padding: 9px 14px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .directory-list {
+      max-height: min(580px, calc(100vh - 210px));
+      overflow: auto;
+      padding: 0 10px 12px;
+    }
+
+    .directory-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      width: 100%;
+      margin-top: 6px;
+      padding: 10px 12px;
+      text-align: left;
+    }
+
+    .stage-card, .patch-card, .controls-card, .info-card {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    .stage-card {
+      padding: 14px;
+    }
+
+    .info-card {
+      padding: 6px 10px 4px;
+      min-height: 0;
+    }
+
+    .stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #05070a;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      user-select: none;
+      touch-action: none;
+      cursor: crosshair;
+    }
+
+    .stage.side-by-side, .patch-stage.side-by-side {
+      display: grid;
+      grid-template-columns: repeat(var(--pane-columns, 2), minmax(0, 1fr));
+      grid-template-rows: repeat(var(--pane-rows, 1), minmax(0, 1fr));
+      gap: 2px;
+      background: var(--border);
+    }
+
+    .stage.overlay, .patch-stage.overlay {
+      display: block;
+    }
+
+    .image-pane {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .stage.overlay .image-pane {
+      position: absolute;
+      inset: 0;
+      background: transparent;
+    }
+
+    .image-pane[hidden], .patch-pane[hidden], .info-panel[hidden], button[hidden] { display: none; }
+
+    .image-pane img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      pointer-events: none;
+      background: #000;
+      z-index: 1;
+      opacity: 1;
+    }
+
+    .image-pane img.is-hidden {
+      opacity: 0;
+      z-index: 0;
+    }
+
+    .image-pane img:not(.is-hidden) {
+      opacity: 1;
+      z-index: 2;
+    }
+
+    .pane-label {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 3;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-size: 0.75rem;
+      color: #dce7f5;
+      pointer-events: none;
+    }
+
+    .pane-label.swapped {
+      border-color: color-mix(in srgb, var(--accent-2) 55%, transparent);
+      color: #d8fff3;
+    }
+
+    .overlay [data-corner$="right"] .pane-label { left: auto; right: 10px; }
+    .overlay [data-corner^="bottom"] .pane-label { top: auto; bottom: 10px; }
+    .overlay [data-corner="bottom-center"] .pane-label {
+      left: var(--junction-x);
+      transform: translateX(-50%);
+    }
+
+    .overlay .pane-missing, .overlay .patch-hint {
+      inset: auto;
+      left: var(--region-center-x);
+      top: var(--region-center-y);
+      transform: translate(-50%, -50%);
+      padding: 6px 10px;
+      white-space: nowrap;
+    }
+
+    .split-lines {
+      display: none;
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    .split-line {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.9);
+      stroke-width: 2px;
+      filter: drop-shadow(0 0 1px #000);
+    }
+
+    .split-hit {
+      fill: none;
+      stroke: transparent;
+      stroke-width: 16px;
+      pointer-events: stroke;
+      touch-action: none;
+      cursor: move;
+    }
+
+    .split-hit[data-axis="x"] { cursor: ew-resize; }
+    .split-hit[data-axis="y"] { cursor: ns-resize; }
+
+    .split-handle {
+      display: none;
+      position: absolute;
+      z-index: 6;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: rgba(20, 24, 32, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      place-items: center;
+      color: #fff;
+      font-size: 15px;
+      box-shadow: var(--shadow);
+      cursor: move;
+      touch-action: none;
+    }
+
+    .split-handle[data-axis="x"] { cursor: ew-resize; }
+    .split-handle:active { transform: translate(-50%, -50%); }
+    .overlay > .split-lines { display: block; }
+    .overlay > .split-handle { display: grid; }
+
+
+    .hover-box {
+      display: none;
+      position: absolute;
+      border: 1.5px solid var(--accent-2);
+      box-shadow: 0 0 0 1px rgba(0,0,0,.5), inset 0 0 0 1px rgba(0,0,0,.25);
+      pointer-events: none;
+      z-index: 4;
+      background: rgba(45, 212, 168, 0.08);
+    }
+
+    .hover-box.selecting {
+      border-style: dashed;
+      border-color: #7ec8ff;
+      background: rgba(61, 156, 240, 0.12);
+    }
+
+    .empty-hint {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 0.95rem;
+      z-index: 1;
+      pointer-events: none;
+      text-align: center;
+      padding: 24px;
+    }
+
+    .empty-hint[hidden] { display: none; }
+
+    .pane-missing {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      background: #05070a;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .pane-missing[hidden] { display: none; }
+
+    @media (max-width: 700px) {
+      .picker-tools { grid-template-columns: 1fr auto; }
+    }
+
+    .controls-card {
+      padding: 14px 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .controls-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .time {
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+      font-size: 0.88rem;
+      min-width: 120px;
+    }
+
+    .mode-toggle {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+
+    .mode-toggle button {
+      border: none;
+      border-radius: 0;
+      background: transparent;
+      padding: 8px 14px;
+    }
+
+    .mode-toggle button.active {
+      background: color-mix(in srgb, var(--accent) 28%, var(--panel));
+      color: #fff;
+    }
+
+    .patch-card {
+      padding: 14px 16px 18px;
+    }
+
+    .patch-header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .patch-header-left {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .patch-header h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .patch-meta {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .patch-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: var(--patch-aspect, 16 / 9);
+      max-height: min(70vh, 720px);
+      background: #05070a;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .patch-pane {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+      background:
+        linear-gradient(45deg, #12161e 25%, transparent 25%),
+        linear-gradient(-45deg, #12161e 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #12161e 75%),
+        linear-gradient(-45deg, transparent 75%, #12161e 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    }
+
+    .patch-stage.overlay .patch-pane {
+      position: absolute;
+      inset: 0;
+    }
+
+    canvas.patch {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      image-rendering: pixelated;
+      -ms-interpolation-mode: nearest-neighbor;
+      background: #000;
+    }
+
+    .patch-hint {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-align: center;
+      padding: 28px 12px;
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    .patch-hint.hidden { display: none; }
+
+    .info-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 1100px) {
+      .info-strip { grid-template-columns: 1fr; }
+    }
+
+    .info-panel {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 2px 10px;
+      font-size: 0.75rem;
+      line-height: 1.35;
+    }
+
+    .info-panel .tag {
+      display: inline-grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      background: color-mix(in srgb, var(--accent) 25%, transparent);
+      color: var(--accent);
+      font-size: 0.7rem;
+      font-weight: 650;
+      flex: 0 0 auto;
+    }
+
+    .info-panel .name {
+      font-weight: 600;
+      color: var(--text);
+      max-width: 28%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .info-panel .meta {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .info-panel .meta strong {
+      color: color-mix(in srgb, var(--muted) 70%, var(--text));
+      font-weight: 500;
+      margin-right: 3px;
+    }
+
+    .info-panel .meta.muted { opacity: 0.75; }
+
+    .swap-hint {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+
+    kbd {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      font-family: inherit;
+      font-size: 0.8rem;
+      color: var(--text);
+    }
+
+    .subtitle kbd {
+      font-size: 0.78rem;
+      vertical-align: 1px;
+    }
+
+    .swap-hint .on {
+      color: var(--accent-2);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>多图对比</h1>
+      <p class="subtitle">选择 A、B 开始对比，可加 C、D · 拖动分割线或交点 · 拖拽框选 Patch · <kbd>←</kbd>/<kbd>→</kbd> 切图</p>
+    </div>
+    <div class="toolbar">
+      <button class="file-btn" id="chooseA">选择目录 A</button>
+      <span class="file-label" id="nameA">未选择</span>
+      <button class="file-btn" id="chooseB">选择目录 B</button>
+      <span class="file-label" id="nameB">未选择</span>
+      <button class="file-btn" id="chooseC">选择目录 C</button>
+      <span class="file-label" id="nameC">未选择</span>
+      <button id="clearC" hidden>清除 C</button>
+      <button class="file-btn" id="chooseD">选择目录 D</button>
+      <span class="file-label" id="nameD">未选择</span>
+      <button id="clearD" hidden>清除 D</button>
+      <button class="file-btn" id="chooseLQ">选择目录 LQ</button>
+      <span class="file-label" id="nameLQ">未选择</span>
+      <button id="clearLQ" disabled>清除 LQ</button>
+      <button class="file-btn" id="chooseGT">选择目录 GT</button>
+      <span class="file-label" id="nameGT">未选择</span>
+      <button id="clearGT" disabled>清除 GT</button>
+      <button id="refreshImages" title="重新读取目录和图片版本；图片变化后下载新版">刷新图片</button>
+      <button id="clearImageCache" title="清除本机图片缓存，当前显示的图片会保留到下次切换">清除缓存</button>
+      <span class="file-label" id="cacheStatus" style="max-width: none" title="图片保存在当前浏览器的本机存储中，最多约 4 GB">本机缓存初始化中…</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <section class="info-card">
+      <div class="info-strip">
+        <div class="info-panel" title="图片 A">
+          <span class="tag">A</span>
+          <span class="name" id="infoAName">—</span>
+          <span class="meta" id="infoARes">—</span>
+          <span class="meta" id="infoAType">—</span>
+          <span class="meta" id="infoASize">—</span>
+        </div>
+        <div class="info-panel" title="图片 B">
+          <span class="tag">B</span>
+          <span class="name" id="infoBName">—</span>
+          <span class="meta" id="infoBRes">—</span>
+          <span class="meta" id="infoBType">—</span>
+          <span class="meta" id="infoBSize">—</span>
+        </div>
+        <div class="info-panel" title="图片 C" id="infoC" hidden>
+          <span class="tag">C</span>
+          <span class="name" id="infoCName">—</span>
+          <span class="meta" id="infoCRes">—</span>
+          <span class="meta" id="infoCType">—</span>
+          <span class="meta" id="infoCSize">—</span>
+        </div>
+        <div class="info-panel" title="图片 D" id="infoD" hidden>
+          <span class="tag">D</span>
+          <span class="name" id="infoDName">—</span>
+          <span class="meta" id="infoDRes">—</span>
+          <span class="meta" id="infoDType">—</span>
+          <span class="meta" id="infoDSize">—</span>
+        </div>
+        <div class="info-panel" title="图片 LQ">
+          <span class="tag">LQ</span>
+          <span class="name" id="infoLQName">—</span>
+          <span class="meta" id="infoLQRes">—</span>
+          <span class="meta" id="infoLQType">—</span>
+          <span class="meta" id="infoLQSize">—</span>
+        </div>
+        <div class="info-panel" title="图片 GT">
+          <span class="tag">GT</span>
+          <span class="name" id="infoGTName">—</span>
+          <span class="meta" id="infoGTRes">—</span>
+          <span class="meta" id="infoGTType">—</span>
+          <span class="meta" id="infoGTSize">—</span>
+        </div>
+      </div>
+      <p class="swap-hint" id="swapHint">
+        <kbd>1</kbd> LQ↔A · <kbd>2</kbd> LQ↔B · <kbd>3</kbd> GT↔A · <kbd>4</kbd> GT↔B · <kbd>←</kbd>/<kbd>→</kbd> 上一张/下一张
+      </p>
+    </section>
+
+    <section class="stage-card">
+      <div class="stage side-by-side" id="stage">
+        <div class="empty-hint" id="emptyHint">请选择 A 和 B 图片目录开始对比</div>
+
+        <div class="image-pane pane-a" id="paneA">
+          <div class="pane-label" id="labelA">A</div>
+          <img id="imageA" alt="图片 A" />
+          <img id="imageLqA" class="is-hidden" alt="LQ 图片 A" />
+          <img id="imageGtA" class="is-hidden" alt="GT 图片 A" />
+          <div class="pane-missing" id="missingA" hidden>当前图片缺失</div>
+          <div class="hover-box" id="hoverBoxA"></div>
+        </div>
+
+        <div class="image-pane pane-b" id="paneB">
+          <div class="pane-label" id="labelB">B</div>
+          <img id="imageB" alt="图片 B" />
+          <img id="imageLqB" class="is-hidden" alt="LQ 图片 B" />
+          <img id="imageGtB" class="is-hidden" alt="GT 图片 B" />
+          <div class="pane-missing" id="missingB" hidden>当前图片缺失</div>
+          <div class="hover-box" id="hoverBoxB"></div>
+        </div>
+
+        <div class="image-pane" id="paneC" hidden>
+          <div class="pane-label" id="labelC">C</div>
+          <img id="imageC" alt="图片 C" />
+          <div class="pane-missing" id="missingC" hidden>当前图片缺失</div>
+          <div class="hover-box" id="hoverBoxC"></div>
+        </div>
+
+        <div class="image-pane" id="paneD" hidden>
+          <div class="pane-label" id="labelD">D</div>
+          <img id="imageD" alt="图片 D" />
+          <div class="pane-missing" id="missingD" hidden>当前图片缺失</div>
+          <div class="hover-box" id="hoverBoxD"></div>
+        </div>
+
+        <svg class="split-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <button type="button" class="split-handle" title="拖动分割交点或用方向键微调" aria-label="移动主图分割线">↔</button>
+      </div>
+    </section>
+
+    <section class="controls-card">
+      <div class="controls-row">
+        <button id="previousBtn" disabled>← 上一张</button>
+        <button class="primary" id="nextBtn" disabled>下一张 →</button>
+        <span class="time" id="imagePosition">0 / 0</span>
+
+        <div class="mode-toggle" role="group" aria-label="展示模式">
+          <button type="button" class="active" data-mode="side" id="modeSide">并排对比</button>
+          <button type="button" data-mode="overlay" id="modeOverlay">重叠分割</button>
+        </div>
+
+      </div>
+    </section>
+
+    <section class="patch-card">
+      <div class="patch-header">
+        <div class="patch-header-left">
+          <h2>Patch 预览（鼠标框选）</h2>
+          <div class="mode-toggle" role="group" aria-label="Patch 展示模式">
+            <button type="button" class="active" id="patchModeSide">并排对比</button>
+            <button type="button" id="patchModeOverlay">重叠分割</button>
+          </div>
+        </div>
+        <div class="patch-meta" id="patchMeta">在画面上拖拽框选区域</div>
+      </div>
+
+      <div class="patch-stage side-by-side" id="patchStage">
+        <div class="patch-pane patch-pane-a" id="patchPaneA">
+          <div class="pane-label">A</div>
+          <canvas class="patch" id="patchA" width="0" height="0"></canvas>
+          <div class="patch-hint" id="hintA">拖拽框选 patch</div>
+        </div>
+        <div class="patch-pane patch-pane-b" id="patchPaneB">
+          <div class="pane-label">B</div>
+          <canvas class="patch" id="patchB" width="0" height="0"></canvas>
+          <div class="patch-hint" id="hintB">拖拽框选 patch</div>
+        </div>
+        <div class="patch-pane" id="patchPaneC" hidden>
+          <div class="pane-label">C</div>
+          <canvas class="patch" id="patchC" width="0" height="0"></canvas>
+          <div class="patch-hint" id="hintC">拖拽框选 patch</div>
+        </div>
+        <div class="patch-pane" id="patchPaneD" hidden>
+          <div class="pane-label">D</div>
+          <canvas class="patch" id="patchD" width="0" height="0"></canvas>
+          <div class="patch-hint" id="hintD">拖拽框选 patch</div>
+        </div>
+        <svg class="split-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <button type="button" class="split-handle" title="拖动分割交点或用方向键微调" aria-label="移动 Patch 分割线">↔</button>
+      </div>
+    </section>
+  </div>
+
+  <dialog id="directoryPicker">
+    <div class="picker-head">
+      <h2 id="pickerTitle">选择图片目录</h2>
+      <button id="closePicker">关闭</button>
+    </div>
+    <div class="picker-tools">
+      <input class="picker-search" id="pickerPath" type="text" placeholder="容器内绝对路径，如 /mnt/images/A" autocomplete="off" />
+      <button id="jumpPath">跳转</button>
+      <button id="parentDirectory">上一级</button>
+      <button id="refreshDirectories">刷新</button>
+    </div>
+    <div class="picker-status" id="pickerStatus">正在读取目录…</div>
+    <div class="directory-list" id="directoryList"></div>
+  </dialog>
+
+  <script src="/image-cache.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const stage = $("stage");
+    const patchStage = $("patchStage");
+    const paneKeys = ["A", "B", "C", "D"];
+    const elementsByKey = (prefix) => Object.fromEntries(paneKeys.map((key) => [key, $(prefix + key)]));
+    const panes = elementsByKey("pane");
+    const images = {
+      ...elementsByKey("image"),
+      LqA: $("imageLqA"), LqB: $("imageLqB"), GtA: $("imageGtA"), GtB: $("imageGtB")
+    };
+    const missing = elementsByKey("missing");
+    const hoverBoxes = elementsByKey("hoverBox");
+    const patchPanes = elementsByKey("patchPane");
+    const patchCanvases = elementsByKey("patch");
+    const patchHints = elementsByKey("hint");
+    const picker = $("directoryPicker");
+    const directoryKeys = [...paneKeys, "LQ", "GT"];
+    const selected = Object.fromEntries(directoryKeys.map((key) => [key, null]));
+    const visiblePaneKeys = () => paneKeys.filter((key) => key === "A" || key === "B" || selected[key]);
+    const mainView = createComparisonView(stage, panes);
+    const patchView = createComparisonView(patchStage, patchPanes);
+    let files = [];
+    let index = -1;
+    let entries = {};
+    let loaded = {};
+    let requestVersion = 0;
+    let pickerTarget = null;
+    let pickerData = null;
+    let pickerVersion = 0;
+    let mode = "side";
+    let patchMode = "side";
+    let useLqA = false;
+    let useLqB = false;
+    let useGtA = false;
+    let useGtB = false;
+    let selection = null;
+    let drawing = null;
+    let directoryIndexes = null;
+    const imageCache = new LocalImageCache({
+      activeKeys: () => new Set(Object.values(images).map((image) => image.dataset.cacheKey).filter(Boolean)),
+      activeURLs: () => new Set(Object.values(images).map((image) => image.src).filter(Boolean)),
+      onStatus: ({ persistent, count, bytes }) => {
+        $("cacheStatus").textContent = `${persistent ? "本机缓存" : "内存缓存"}：${count} 张 · ${formatSize(bytes)}`;
+      }
+    });
+
+    // Coordinates are percentages of the shared stage. The rays are 120° apart on screen.
+    function comparisonRegions(count, x, y, aspect) {
+      const rect = (left, top, right, bottom) => [[left, top], [right, top], [right, bottom], [left, bottom]];
+      const vertical = { start: [x, 0], end: [x, 100], axis: "x" };
+      if (count === 2) return {
+        polygons: [rect(0, 0, x, 100), rect(x, 0, 100, 100)],
+        lines: [vertical], corners: ["top-left", "top-right"]
+      };
+      if (count === 4) return {
+        polygons: [rect(0, 0, x, y), rect(x, 0, 100, y), rect(0, y, x, 100), rect(x, y, 100, 100)],
+        lines: [vertical, { start: [0, y], end: [100, y], axis: "y" }],
+        corners: ["top-left", "top-right", "bottom-left", "bottom-right"]
+      };
+
+      const dx = Math.sqrt(3) / aspect;
+      const rays = [[0, -1], [dx, 1], [-dx, 1]];
+      const lines = rays.map(([u, v]) => {
+        const tx = u === 0 ? Infinity : ((u > 0 ? 100 : 0) - x) / u;
+        const ty = ((v > 0 ? 100 : 0) - y) / v;
+        const t = Math.min(tx, ty);
+        return { start: [x, y], end: [x + t * u, y + t * v], axis: "both" };
+      });
+      // Clip the stage by the two half planes defining each sector.
+      function clip(polygon, distance) {
+        const result = [];
+        polygon.forEach((end, i) => {
+          const start = polygon[(i + polygon.length - 1) % polygon.length];
+          const a = distance(start);
+          const b = distance(end);
+          if ((a >= 0) !== (b >= 0)) {
+            const t = a / (a - b);
+            result.push([start[0] + t * (end[0] - start[0]), start[1] + t * (end[1] - start[1])]);
+          }
+          if (b >= 0) result.push(end);
+        });
+        return result;
+      }
+      const cross = ([u, v], [px, py]) => u * (py - y) - v * (px - x);
+      const polygons = [[2, 0], [0, 1], [1, 2]].map(([first, last]) =>
+        clip(clip(rect(0, 0, 100, 100), (point) => cross(rays[first], point)),
+          (point) => -cross(rays[last], point))
+      );
+      return { polygons, lines, corners: ["top-left", "top-right", "bottom-center"] };
+    }
+
+    function createComparisonView(viewport, panels) {
+      const layer = viewport.querySelector(".split-lines");
+      const handle = viewport.querySelector(".split-handle");
+      const svgNS = "http://www.w3.org/2000/svg";
+      const paths = Array.from({ length: 3 }, () => {
+        const line = document.createElementNS(svgNS, "path");
+        const hit = document.createElementNS(svgNS, "path");
+        line.setAttribute("class", "split-line");
+        hit.setAttribute("class", "split-hit");
+        for (const path of [line, hit]) path.setAttribute("vector-effect", "non-scaling-stroke");
+        layer.append(line, hit);
+        return { line, hit };
+      });
+      let layout = "side";
+      let keys = ["A", "B"];
+      let x = 50;
+      let y = 50;
+      let drag = null;
+      const limit = (value) => Math.max(keys.length === 2 ? 0 : 2, Math.min(keys.length === 2 ? 100 : 98, value));
+      const percent = (value) => value.toFixed(5) + "%";
+
+      function draw() {
+        if (layout !== "overlay") return;
+        x = limit(x);
+        y = limit(y);
+        const aspect = (viewport.clientWidth || 1) / (viewport.clientHeight || 1);
+        const { polygons, lines, corners } = comparisonRegions(keys.length, x, y, aspect);
+        viewport.style.setProperty("--junction-x", percent(x));
+        for (const [i, key] of keys.entries()) {
+          const panel = panels[key];
+          const polygon = polygons[i];
+          panel.dataset.corner = corners[i];
+          panel.style.clipPath = "polygon(" + polygon.map((point) => point.map(percent).join(" ")).join(", ") + ")";
+          panel.style.setProperty("--region-center-x", percent(polygon.reduce((sum, point) => sum + point[0], 0) / polygon.length));
+          panel.style.setProperty("--region-center-y", percent(polygon.reduce((sum, point) => sum + point[1], 0) / polygon.length));
+        }
+        paths.forEach(({line, hit}, i) => {
+          const segment = lines[i];
+          for (const path of [line, hit]) {
+            path.style.display = segment ? "" : "none";
+            if (segment) path.setAttribute("d", "M " + segment.start.join(" ") + " L " + segment.end.join(" "));
+          }
+          if (segment) hit.dataset.axis = segment.axis;
+        });
+        handle.dataset.axis = keys.length === 2 ? "x" : "both";
+        handle.style.left = percent(x);
+        handle.style.top = percent(keys.length === 2 ? 50 : y);
+        handle.textContent = keys.length === 2 ? "↔" : "✥";
+      }
+
+      function update(value, visibleKeys) {
+        layout = value;
+        keys = visibleKeys;
+        viewport.classList.toggle("overlay", layout === "overlay");
+        viewport.classList.toggle("side-by-side", layout === "side");
+        viewport.style.setProperty("--pane-columns", keys.length === 4 ? 2 : keys.length);
+        viewport.style.setProperty("--pane-rows", keys.length === 4 ? 2 : 1);
+        for (const [key, panel] of Object.entries(panels)) {
+          panel.hidden = !keys.includes(key);
+          if (panel.hidden || layout === "side") panel.style.clipPath = "";
+        }
+        draw();
+      }
+
+      function startDrag(event) {
+        const axis = event.target.dataset.axis;
+        if (!axis || event.button !== 0 || drag) return;
+        event.preventDefault();
+        event.stopPropagation();
+        drag = { id: event.pointerId, axis, x, y, left: event.clientX, top: event.clientY };
+        viewport.setPointerCapture(event.pointerId);
+      }
+      layer.addEventListener("pointerdown", startDrag);
+      handle.addEventListener("pointerdown", startDrag);
+      viewport.addEventListener("pointermove", (event) => {
+        if (event.pointerId !== drag?.id) return;
+        if (drag.axis !== "y") x = drag.x + 100 * (event.clientX - drag.left) / viewport.clientWidth;
+        if (drag.axis !== "x") y = drag.y + 100 * (event.clientY - drag.top) / viewport.clientHeight;
+        draw();
+      });
+      for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+        viewport.addEventListener(type, (event) => {
+          if (event.pointerId === drag?.id) drag = null;
+        });
+      }
+      handle.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const step = event.shiftKey ? 5 : 1;
+        if (event.key === "ArrowLeft") x -= step;
+        if (event.key === "ArrowRight") x += step;
+        if (keys.length > 2 && event.key === "ArrowUp") y -= step;
+        if (keys.length > 2 && event.key === "ArrowDown") y += step;
+        draw();
+      });
+      new ResizeObserver(draw).observe(viewport);
+      return { update };
+    }
+
+
+    async function getJSON(url) {
+      const response = await fetch(url);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || response.statusText);
+      return data;
+    }
+
+    function directoryQuery() {
+      const params = new URLSearchParams();
+      for (const key of directoryKeys) {
+        if (selected[key]) params.append("dirs", selected[key].id);
+      }
+      return params;
+    }
+
+    function updateURL() {
+      const params = new URLSearchParams();
+      for (const key of directoryKeys) {
+        if (selected[key]) params.set(key.toLowerCase(), selected[key].id);
+      }
+      if (index >= 0) params.set("file", files[index]);
+      history.replaceState(null, "", `${location.pathname}${params.size ? `?${params}` : ""}`);
+    }
+
+    function updateDirectoryLabels() {
+      for (const key of directoryKeys) {
+        const label = $(`name${key}`);
+        label.textContent = selected[key]?.path || "未选择";
+        label.title = selected[key]?.path || "";
+      }
+      $("clearLQ").disabled = !selected.LQ;
+      $("clearGT").disabled = !selected.GT;
+      for (const key of ["C", "D"]) {
+        $("clear" + key).hidden = $("info" + key).hidden = !selected[key];
+      }
+      mainView.update(mode, visiblePaneKeys());
+      patchView.update(patchMode, visiblePaneKeys());
+    }
+
+    async function browse(query) {
+      const version = ++pickerVersion;
+      $("pickerStatus").textContent = "正在读取目录…";
+      try {
+        const data = await getJSON(`/api/browse?${query}`);
+        if (version !== pickerVersion) return;
+        pickerData = data;
+        const path = data.current.path ? `${data.root.replace(/\/$/, "")}/${data.current.path}` : data.root;
+        $("pickerPath").value = path;
+        $("parentDirectory").disabled = data.parentId === null;
+        $("pickerStatus").textContent = `${path} · ${data.current.imageCount} 张直接图片 · ${data.directories.length} 个子目录`;
+        const list = $("directoryList");
+        list.replaceChildren();
+        const select = document.createElement("button");
+        select.className = "directory-item primary";
+        select.textContent = `选择当前目录：${path}`;
+        select.onclick = () => selectDirectory(data.current.id, path);
+        list.append(select);
+        for (const directory of data.directories) {
+          const button = document.createElement("button");
+          button.className = "directory-item";
+          button.textContent = `📁 ${directory.name}`;
+          button.onclick = () => browse(new URLSearchParams({ dir: directory.id }));
+          list.append(button);
+        }
+      } catch (error) {
+        if (version === pickerVersion) $("pickerStatus").textContent = error.message;
+      }
+    }
+
+    function openPicker(target) {
+      pickerTarget = target;
+      $("pickerTitle").textContent = `选择图片目录 ${target}`;
+      picker.showModal();
+      browse(new URLSearchParams({ dir: selected[target]?.id || "root" }));
+    }
+
+    function selectDirectory(id, path) {
+      selected[pickerTarget] = { id, path };
+      picker.close();
+      updateDirectoryLabels();
+      loadComparison(files[index]);
+    }
+
+    function clearImages() {
+      entries = {};
+      loaded = {};
+      for (const image of Object.values(images)) {
+        image.onload = image.onerror = null;
+        image.removeAttribute("src");
+        delete image.dataset.cacheKey;
+      }
+      render();
+    }
+
+    async function loadComparison(preferredName) {
+      const version = ++requestVersion;
+      files = [];
+      directoryIndexes = null;
+      index = -1;
+      clearImages();
+      updateControls();
+      updateURL();
+      if (!selected.A || !selected.B) {
+        $("emptyHint").textContent = "请选择 A 和 B 图片目录开始对比";
+        $("emptyHint").hidden = false;
+        return;
+      }
+      $("emptyHint").textContent = "正在读取图片目录…";
+      $("emptyHint").hidden = false;
+      try {
+        const params = directoryQuery();
+        params.set("refresh", "1");
+        const data = await getJSON(`/api/compare?${params}`);
+        if (version !== requestVersion) return;
+        files = data.files;
+        if (data.indexes) directoryIndexes = data.indexes.map((items) => new Map(items.map((item) => [item.name, item])));
+        if (!files.length) {
+          $("emptyHint").textContent = "A 目录没有支持的图片";
+          updateControls();
+          updateURL();
+          return;
+        }
+        index = Math.max(0, files.indexOf(preferredName));
+        await loadCurrent(version);
+      } catch (error) {
+        if (version === requestVersion) $("emptyHint").textContent = error.message;
+      }
+    }
+
+    async function setImage(image, entry, version) {
+      image.removeAttribute("src");
+      if (!entry?.exists) return;
+      const key = image.id;
+      const url = `/media/${entry.id}/${entry.nameId}?v=${entry.version || entry.mtime}&size=${entry.size}`;
+      image.dataset.cacheKey = new URL(url, location.href).href;
+      image.onload = () => {
+        if (version !== requestVersion) return;
+        loaded[key] = true;
+        render();
+      };
+      image.onerror = () => {
+        if (version !== requestVersion) return;
+        loaded[key] = false;
+        render();
+      };
+      try {
+        const cachedURL = await imageCache.get(url);
+        if (version !== requestVersion) return;
+        image.src = cachedURL;
+      } catch (error) {
+        if (version !== requestVersion) return;
+        loaded[key] = false;
+        render();
+      }
+    }
+
+    async function loadCurrent(version = ++requestVersion) {
+      const name = files[index];
+      if (!name) return;
+      clearImages();
+      $("emptyHint").hidden = true;
+      updateControls();
+      updateURL();
+      try {
+        let data;
+        if (directoryIndexes) {
+          data = { images: directoryKeys.filter((key) => selected[key]).map((key, position) => {
+            const item = directoryIndexes[position].get(name);
+            return { ...item, id: selected[key].id, name, exists: !!item };
+          }) };
+        } else {
+          const params = directoryQuery();
+          params.set("name", name);
+          data = await getJSON(`/api/current?${params}`);
+        }
+        if (version !== requestVersion) return;
+        directoryKeys.filter((key) => selected[key]).forEach((key, position) => {
+          entries[key] = data.images[position];
+        });
+        for (const key of visiblePaneKeys()) setImage(images[key], entries[key], version);
+        setImage(images.LqA, entries.LQ, version);
+        setImage(images.LqB, entries.LQ, version);
+        setImage(images.GtA, entries.GT, version);
+        setImage(images.GtB, entries.GT, version);
+        render();
+      } catch (error) {
+        if (version === requestVersion) {
+          $("emptyHint").textContent = error.message;
+          $("emptyHint").hidden = false;
+        }
+      }
+    }
+
+    function move(direction) {
+      const next = index + direction;
+      if (next < 0 || next >= files.length) return;
+      index = next;
+      loadCurrent();
+    }
+
+    function updateControls() {
+      $("previousBtn").disabled = index <= 0;
+      $("nextBtn").disabled = index < 0 || index >= files.length - 1;
+      $("imagePosition").textContent = `${index + 1} / ${files.length}`;
+    }
+
+    function formatSize(size) {
+      if (size === null || size === undefined) return "—";
+      return size < 1024 ? `${size} B` : size < 1048576 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1048576).toFixed(2)} MB`;
+    }
+
+    function formatType(name) {
+      const extension = name.split(".").pop().toLowerCase();
+      return extension === "jpg" || extension === "jpeg" ? "JPEG" : extension.toUpperCase();
+    }
+
+    function activeImage(side) {
+      const base = images[side];
+      if (side === "C" || side === "D") return loaded[base.id] ? base : null;
+      const lq = side === "A" ? images.LqA : images.LqB;
+      const gt = side === "A" ? images.GtA : images.GtB;
+      const useLq = side === "A" ? useLqA : useLqB;
+      const useGt = side === "A" ? useGtA : useGtB;
+      if (useGt && loaded[gt.id]) return gt;
+      return useLq && loaded[lq.id] ? lq : loaded[base.id] ? base : null;
+    }
+
+    function renderInfo(key, image) {
+      const entry = entries[key];
+      const name = files[index];
+      $(`info${key}Name`).textContent = !selected[key] ? "—" : name || "—";
+      $(`info${key}Res`).textContent = !entry?.exists ? (name && selected[key] ? "缺少同名图片" : "—") : image ? `${image.naturalWidth} × ${image.naturalHeight}` : "加载中…";
+      $(`info${key}Size`).textContent = entry?.exists ? formatSize(entry.size) : "—";
+      $(`info${key}Type`).textContent = entry?.exists ? formatType(name) : "—";
+    }
+
+    function renderPane(side) {
+      const base = images[side];
+      const active = activeImage(side);
+      const sources = side === "A" || side === "B" ? [base, images["Lq" + side], images["Gt" + side]] : [base];
+      for (const image of sources) image.classList.toggle("is-hidden", active !== image);
+      const alternate = active && active !== base ? (active.id.startsWith("imageLq") ? "LQ" : "GT") : null;
+      const label = alternate ? side + " ← " + alternate : side;
+      for (const element of [$("label" + side), patchPanes[side].querySelector(".pane-label")]) {
+        element.textContent = label;
+        element.classList.toggle("swapped", !!alternate);
+      }
+      const entry = entries[side];
+      const placeholder = missing[side];
+      placeholder.hidden = !!active || index < 0;
+      placeholder.textContent = !entry?.exists ? side + " 目录缺少同名图片" : loaded[base.id] === false ? "图片加载失败" : "加载中…";
+      renderInfo(side, active);
+    }
+
+    function render() {
+      for (const key of visiblePaneKeys()) renderPane(key);
+      renderInfo("LQ", loaded.imageLqA ? images.LqA : null);
+      renderInfo("GT", loaded.imageGtA ? images.GtA : null);
+      renderSelection();
+      renderPatch();
+    }
+
+    function setMode(value) {
+      mode = value;
+      mainView.update(value, visiblePaneKeys());
+      $("modeSide").classList.toggle("active", value === "side");
+      $("modeOverlay").classList.toggle("active", value === "overlay");
+      renderSelection();
+    }
+
+    function setPatchMode(value) {
+      patchMode = value;
+      patchView.update(value, visiblePaneKeys());
+      $("patchModeSide").classList.toggle("active", value === "side");
+      $("patchModeOverlay").classList.toggle("active", value === "overlay");
+    }
+
+    function imageRect(side) {
+      const image = activeImage(side);
+      if (!image) return null;
+      const pane = panes[side].getBoundingClientRect();
+      const scale = Math.min(pane.width / image.naturalWidth, pane.height / image.naturalHeight);
+      const width = image.naturalWidth * scale;
+      const height = image.naturalHeight * scale;
+      return { left: pane.left + (pane.width - width) / 2, top: pane.top + (pane.height - height) / 2, width, height, pane };
+    }
+
+    function normalizedPoint(event, rect) {
+      return {
+        x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+        y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))
+      };
+    }
+
+    function renderSelection() {
+      for (const side of visiblePaneKeys()) {
+        const box = hoverBoxes[side];
+        const rect = imageRect(side);
+        box.style.display = selection && rect ? "block" : "none";
+        if (!selection || !rect) continue;
+        box.style.left = `${rect.left - rect.pane.left + selection.x * rect.width}px`;
+        box.style.top = `${rect.top - rect.pane.top + selection.y * rect.height}px`;
+        box.style.width = `${selection.w * rect.width}px`;
+        box.style.height = `${selection.h * rect.height}px`;
+        box.classList.toggle("selecting", !!drawing);
+      }
+    }
+
+    function renderPatch() {
+      const source = visiblePaneKeys().map(activeImage).find(Boolean);
+      if (selection && source) {
+        const width = Math.max(1, Math.round(selection.w * source.naturalWidth));
+        const height = Math.max(1, Math.round(selection.h * source.naturalHeight));
+        $("patchStage").style.setProperty("--patch-aspect", `${width} / ${height}`);
+        $("patchMeta").textContent = `${width} × ${height} px`;
+      } else {
+        patchStage.style.removeProperty("--patch-aspect");
+        $("patchMeta").textContent = "在画面上拖拽框选区域";
+      }
+      for (const side of visiblePaneKeys()) {
+        const canvas = patchCanvases[side];
+        const hint = patchHints[side];
+        const image = activeImage(side);
+        if (!selection || !image) {
+          canvas.width = 0;
+          canvas.height = 0;
+          hint.textContent = !selection ? "拖拽框选 patch" : `${side} 图片缺失`;
+          hint.classList.remove("hidden");
+          continue;
+        }
+        const sx = Math.round(selection.x * image.naturalWidth);
+        const sy = Math.round(selection.y * image.naturalHeight);
+        const sw = Math.max(1, Math.min(image.naturalWidth - sx, Math.round(selection.w * image.naturalWidth)));
+        const sh = Math.max(1, Math.min(image.naturalHeight - sy, Math.round(selection.h * image.naturalHeight)));
+        canvas.width = sw;
+        canvas.height = sh;
+        canvas.getContext("2d").drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
+        hint.classList.add("hidden");
+      }
+    }
+
+    for (const key of directoryKeys) $("choose" + key).onclick = () => openPicker(key);
+    for (const key of ["C", "D"]) {
+      $("clear" + key).onclick = () => {
+        selected[key] = null;
+        updateDirectoryLabels();
+        loadComparison(files[index]);
+      };
+    }
+    $("clearLQ").onclick = () => {
+      selected.LQ = null;
+      useLqA = false;
+      useLqB = false;
+      updateDirectoryLabels();
+      loadComparison(files[index]);
+    };
+    $("clearGT").onclick = () => {
+      selected.GT = null;
+      useGtA = false;
+      useGtB = false;
+      updateDirectoryLabels();
+      loadComparison(files[index]);
+    };
+    $("closePicker").onclick = () => picker.close();
+    $("jumpPath").onclick = () => browse(new URLSearchParams({ path: $("pickerPath").value.trim() }));
+    $("pickerPath").onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        $("jumpPath").click();
+      }
+    };
+    $("parentDirectory").onclick = () => browse(new URLSearchParams({ dir: pickerData.parentId }));
+    $("refreshDirectories").onclick = () => browse(new URLSearchParams({ dir: pickerData?.current.id || "root", refresh: "1" }));
+    $("previousBtn").onclick = () => move(-1);
+    $("nextBtn").onclick = () => move(1);
+    $("refreshImages").onclick = () => loadComparison(files[index]);
+    $("clearImageCache").onclick = async () => {
+      const button = $("clearImageCache");
+      button.disabled = true;
+      try { await imageCache.clear(); }
+      finally { button.disabled = false; }
+    };
+    $("modeSide").onclick = () => setMode("side");
+    $("modeOverlay").onclick = () => setMode("overlay");
+    $("patchModeSide").onclick = () => setPatchMode("side");
+    $("patchModeOverlay").onclick = () => setPatchMode("overlay");
+
+    document.addEventListener("keydown", (event) => {
+      if (picker.open || event.altKey || event.ctrlKey || event.metaKey ||
+          (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]"))) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        move(event.key === "ArrowLeft" ? -1 : 1);
+      } else if (event.key === "1" && selected.LQ) {
+        useLqA = !useLqA;
+        if (useLqA) useGtA = false;
+        render();
+      } else if (event.key === "2" && selected.LQ) {
+        useLqB = !useLqB;
+        if (useLqB) useGtB = false;
+        render();
+      } else if (event.key === "3" && selected.GT) {
+        useGtA = !useGtA;
+        if (useGtA) useLqA = false;
+        render();
+      } else if (event.key === "4" && selected.GT) {
+        useGtB = !useGtB;
+        if (useGtB) useLqB = false;
+        render();
+      }
+    });
+
+    stage.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || index < 0) return;
+      const pane = event.target.closest(".image-pane");
+      if (!pane) return;
+      const side = pane.id.slice("pane".length);
+      const image = activeImage(side);
+      const imageBounds = imageRect(side);
+      if (!image || !imageBounds) return;
+      const start = normalizedPoint(event, imageBounds);
+      drawing = { id: event.pointerId, start, bounds: imageBounds };
+      selection = { x: start.x, y: start.y, w: 0, h: 0 };
+      stage.setPointerCapture(event.pointerId);
+      renderSelection();
+    });
+    stage.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== drawing?.id) return;
+      const end = normalizedPoint(event, drawing.bounds);
+      selection = {
+        x: Math.min(drawing.start.x, end.x),
+        y: Math.min(drawing.start.y, end.y),
+        w: Math.abs(drawing.start.x - end.x),
+        h: Math.abs(drawing.start.y - end.y)
+      };
+      renderSelection();
+    });
+    stage.addEventListener("pointerup", (event) => {
+      if (event.pointerId !== drawing?.id) return;
+      if (selection.w * drawing.bounds.width < 4 || selection.h * drawing.bounds.height < 4) selection = null;
+      drawing = null;
+      render();
+    });
+    stage.addEventListener("lostpointercapture", (event) => {
+      if (event.pointerId !== drawing?.id) return;
+      drawing = null;
+      render();
+    });
+    window.addEventListener("resize", renderSelection);
+
+    async function restoreURL() {
+      const params = new URLSearchParams(location.search);
+      await Promise.all(directoryKeys.map(async (key) => {
+        const id = params.get(key.toLowerCase());
+        if (!id) return;
+        try {
+          const data = await getJSON(`/api/browse?${new URLSearchParams({ dir: id })}`);
+          selected[key] = {
+            id: data.current.id,
+            path: data.current.path ? `${data.root.replace(/\/$/, "")}/${data.current.path}` : data.root
+          };
+        } catch (error) {
+          $("emptyHint").textContent = `无法恢复 ${key} 目录：${error.message}`;
+        }
+      }));
+      updateDirectoryLabels();
+      await loadComparison(params.get("file"));
+    }
+
+    setMode("side");
+    setPatchMode("side");
+    restoreURL();
+  </script>
+</body>
+</html>

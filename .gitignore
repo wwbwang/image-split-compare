@@ -1,0 +1,10 @@
+# Runtime files and Python caches
+*.log
+__pycache__/
+*.py[cod]
+/.venv/
+
+# Deployment backups and staging files
+/.backups/
+/.local-cache-staging-*
+/.multi-compare-*
