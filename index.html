@@ -181,6 +181,11 @@
       text-align: left;
     }
 
+    .directory-item:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+
     .stage-card, .patch-card, .controls-card, .info-card {
       background: color-mix(in srgb, var(--panel) 92%, transparent);
       border: 1px solid var(--border);
@@ -1050,7 +1055,7 @@
       patchView.update(patchMode, visiblePaneKeys());
     }
 
-    async function browse(query) {
+    async function browse(query, revealDirectoryId) {
       const version = ++pickerVersion;
       $("pickerStatus").textContent = "正在读取目录…";
       try {
@@ -1068,12 +1073,20 @@
         select.textContent = `选择当前目录：${path}`;
         select.onclick = () => selectDirectory(data.current.id, path);
         list.append(select);
+        let revealRow = null;
         for (const directory of data.directories) {
           const button = document.createElement("button");
           button.className = "directory-item";
           button.textContent = `📁 ${directory.name}`;
           button.onclick = () => browse(new URLSearchParams({ dir: directory.id }));
           list.append(button);
+          if (directory.id === revealDirectoryId) revealRow = button;
+        }
+        list.scrollTop = 0;
+        if (revealRow && picker.open) {
+          const row = revealRow.getBoundingClientRect();
+          list.scrollTop = row.top - list.getBoundingClientRect().top - (list.clientHeight - row.height) / 2;
+          revealRow.focus({ preventScroll: true });
         }
       } catch (error) {
         if (version === pickerVersion) $("pickerStatus").textContent = error.message;
@@ -1406,7 +1419,10 @@
         $("jumpPath").click();
       }
     };
-    $("parentDirectory").onclick = () => browse(new URLSearchParams({ dir: pickerData.parentId }));
+    $("parentDirectory").onclick = () => {
+      const { current, parentId } = pickerData ?? {};
+      if (parentId) browse(new URLSearchParams({ dir: parentId }), current.id);
+    };
     $("refreshDirectories").onclick = () => browse(new URLSearchParams({ dir: pickerData?.current.id || "root", refresh: "1" }));
     $("previousBtn").onclick = () => move(-1);
     $("nextBtn").onclick = () => move(1);
