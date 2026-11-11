@@ -1,4 +1,4 @@
-# Image Compare
+# Image Split Compare
 
 独立的只读图片目录对比服务。页面保留 A/B 主画面、并排与重叠分割、Patch 框选和可选 LQ / GT 切换。
 
