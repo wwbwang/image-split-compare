@@ -77,16 +77,28 @@ class LocalImageCache {
       return existing.url;
     }
     this.trimMemory();
-    if (this.pending.has(key)) return this.pending.get(key);
-    const epoch = this.epoch;
-    const job = this.load(key, epoch);
-    this.pending.set(key, job);
-    try { return await job; }
+    let job = this.pending.get(key);
+    if (!job) {
+      const controller = new AbortController();
+      job = { controller, promise: this.load(key, this.epoch, controller.signal) };
+      this.pending.set(key, job);
+    }
+    try { return await job.promise; }
     finally { if (this.pending.get(key) === job) this.pending.delete(key); }
   }
 
-  async load(key, epoch) {
+  cancelUnused() {
+    const active = this.activeKeys();
+    for (const [key, job] of this.pending) {
+      if (active.has(key)) continue;
+      this.pending.delete(key);
+      job.controller.abort();
+    }
+  }
+
+  async load(key, epoch, signal) {
     await this.ready;
+    signal.throwIfAborted();
     let blob;
     try {
       const saved = await this.disk?.match(key);
@@ -100,10 +112,12 @@ class LocalImageCache {
         this.diskEntries.delete(key);
       }
     } catch { /* Disk failures must not prevent viewing images. */ }
+    signal.throwIfAborted();
     if (!blob) {
-      const response = await fetch(key, { cache: "no-store" });
+      const response = await fetch(key, { cache: "no-store", signal });
       if (!response.ok) throw new Error(`图片加载失败 (${response.status})`);
       blob = await response.blob();
+      signal.throwIfAborted();
       if (this.disk && blob.size <= this.diskLimit && epoch === this.epoch) {
         this.queue = this.queue.then(async () => {
           if (epoch !== this.epoch) return;
@@ -138,6 +152,7 @@ class LocalImageCache {
   async clear() {
     await this.ready;
     ++this.epoch;
+    for (const job of this.pending.values()) job.controller.abort();
     this.pending.clear();
     // Keep only the currently displayed blobs until the next navigation.
     const visibleURLs = this.activeURLs();

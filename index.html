@@ -607,9 +607,11 @@
       <span class="file-label" id="nameB">未选择</span>
       <button class="file-btn" id="chooseC">选择目录 C</button>
       <span class="file-label" id="nameC">未选择</span>
+      <button id="toggleC" aria-controls="paneC patchPaneC" hidden>隐藏 C</button>
       <button id="clearC" hidden>清除 C</button>
       <button class="file-btn" id="chooseD">选择目录 D</button>
       <span class="file-label" id="nameD">未选择</span>
+      <button id="toggleD" aria-controls="paneD patchPaneD" hidden>隐藏 D</button>
       <button id="clearD" hidden>清除 D</button>
       <button class="file-btn" id="chooseLQ">选择目录 LQ</button>
       <span class="file-label" id="nameLQ">未选择</span>
@@ -801,7 +803,10 @@
     const picker = $("directoryPicker");
     const directoryKeys = [...paneKeys, "LQ", "GT"];
     const selected = Object.fromEntries(directoryKeys.map((key) => [key, null]));
-    const visiblePaneKeys = () => paneKeys.filter((key) => key === "A" || key === "B" || selected[key]);
+    const optionalPanes = ["C", "D"];
+    const hiddenPanes = new Set();
+    const visiblePaneKeys = () => paneKeys.filter((key) => key === "A" || key === "B" || (selected[key] && !hiddenPanes.has(key)));
+    const imageRequests = new WeakMap();
     const mainView = createComparisonView(stage, panes, (key) => {
       const image = activeImage(key);
       return image ? [image.naturalWidth, image.naturalHeight] : null;
@@ -813,7 +818,7 @@
     let files = [];
     let index = -1;
     let entries = {};
-    let loaded = {};
+    const loaded = {};
     let requestVersion = 0;
     let pickerTarget = null;
     let pickerData = null;
@@ -1015,6 +1020,8 @@
       for (const key of directoryKeys) {
         if (selected[key]) params.set(key.toLowerCase(), selected[key].id);
       }
+      const hidden = optionalPanes.filter((key) => selected[key] && hiddenPanes.has(key));
+      if (hidden.length) params.set("hide", hidden.join(",").toLowerCase());
       if (index >= 0) params.set("file", files[index]);
       history.replaceState(null, "", `${location.pathname}${params.size ? `?${params}` : ""}`);
     }
@@ -1027,8 +1034,13 @@
       }
       $("clearLQ").disabled = !selected.LQ;
       $("clearGT").disabled = !selected.GT;
-      for (const key of ["C", "D"]) {
-        $("clear" + key).hidden = $("info" + key).hidden = !selected[key];
+      for (const key of optionalPanes) {
+        const toggle = $("toggle" + key);
+        const hidden = hiddenPanes.has(key);
+        toggle.hidden = $("clear" + key).hidden = !selected[key];
+        toggle.textContent = (hidden ? "显示 " : "隐藏 ") + key;
+        toggle.setAttribute("aria-expanded", String(!hidden));
+        $("info" + key).hidden = !selected[key] || hidden;
       }
       mainView.update(mode, visiblePaneKeys());
       patchView.update(patchMode, visiblePaneKeys());
@@ -1078,14 +1090,34 @@
       loadComparison(files[index]);
     }
 
+    function clearImage(image) {
+      imageRequests.delete(image);
+      delete loaded[image.id];
+      image.onload = image.onerror = null;
+      image.removeAttribute("src");
+      delete image.dataset.cacheKey;
+    }
+
     function clearImages() {
       entries = {};
-      loaded = {};
-      for (const image of Object.values(images)) {
-        image.onload = image.onerror = null;
-        image.removeAttribute("src");
-        delete image.dataset.cacheKey;
+      for (const image of Object.values(images)) clearImage(image);
+      imageCache.cancelUnused();
+      render();
+    }
+
+    function togglePane(key) {
+      if (!selected[key]) return;
+      if (hiddenPanes.has(key)) {
+        hiddenPanes.delete(key);
+        setImage(images[key], entries[key], requestVersion);
+      } else {
+        hiddenPanes.add(key);
+        clearImage(images[key]);
+        patchCanvases[key].width = patchCanvases[key].height = 0;
+        imageCache.cancelUnused();
       }
+      updateDirectoryLabels();
+      updateURL();
       render();
     }
 
@@ -1125,27 +1157,30 @@
     }
 
     async function setImage(image, entry, version) {
-      image.removeAttribute("src");
+      clearImage(image);
       if (!entry?.exists) return;
       const key = image.id;
+      const request = {};
+      imageRequests.set(image, request);
+      const isCurrent = () => version === requestVersion && imageRequests.get(image) === request;
       const url = `/media/${entry.id}/${entry.nameId}?v=${entry.version || entry.mtime}&size=${entry.size}`;
       image.dataset.cacheKey = new URL(url, location.href).href;
       image.onload = () => {
-        if (version !== requestVersion) return;
+        if (!isCurrent()) return;
         loaded[key] = true;
         render();
       };
       image.onerror = () => {
-        if (version !== requestVersion) return;
+        if (!isCurrent()) return;
         loaded[key] = false;
         render();
       };
       try {
         const cachedURL = await imageCache.get(url);
-        if (version !== requestVersion) return;
+        if (!isCurrent()) return;
         image.src = cachedURL;
-      } catch (error) {
-        if (version !== requestVersion) return;
+      } catch {
+        if (!isCurrent()) return;
         loaded[key] = false;
         render();
       }
@@ -1337,9 +1372,11 @@
     }
 
     for (const key of directoryKeys) $("choose" + key).onclick = () => openPicker(key);
-    for (const key of ["C", "D"]) {
+    for (const key of optionalPanes) {
+      $("toggle" + key).onclick = () => togglePane(key);
       $("clear" + key).onclick = () => {
         selected[key] = null;
+        hiddenPanes.delete(key);
         updateDirectoryLabels();
         loadComparison(files[index]);
       };
@@ -1447,6 +1484,7 @@
 
     async function restoreURL() {
       const params = new URLSearchParams(location.search);
+      const hidden = (params.get("hide") || "").split(",");
       await Promise.all(directoryKeys.map(async (key) => {
         const id = params.get(key.toLowerCase());
         if (!id) return;
@@ -1460,6 +1498,9 @@
           $("emptyHint").textContent = `无法恢复 ${key} 目录：${error.message}`;
         }
       }));
+      for (const key of optionalPanes) {
+        if (selected[key] && hidden.includes(key.toLowerCase())) hiddenPanes.add(key);
+      }
       updateDirectoryLabels();
       await loadComparison(params.get("file"));
     }
