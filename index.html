@@ -1128,6 +1128,11 @@
       render();
     }
 
+    function syncDownloadDirectories() {
+      const keys = [...visiblePaneKeys(), "LQ", "GT"];
+      imageCache.retainDirectories(new Set(keys.filter((key) => selected[key]).map((key) => selected[key].id)));
+    }
+
     function togglePane(key) {
       if (!selected[key]) return;
       if (hiddenPanes.has(key)) {
@@ -1139,6 +1144,7 @@
         patchCanvases[key].width = patchCanvases[key].height = 0;
         imageCache.trimMemory();
       }
+      syncDownloadDirectories();
       updateDirectoryLabels();
       updateURL();
       render();
@@ -1146,6 +1152,7 @@
 
     async function loadComparison(preferredName) {
       const version = ++requestVersion;
+      syncDownloadDirectories();
       files = [];
       directoryIndexes = null;
       index = -1;
@@ -1199,7 +1206,7 @@
         render();
       };
       try {
-        const cachedURL = await imageCache.get(url);
+        const cachedURL = await imageCache.get(url, entry.id);
         if (!isCurrent()) return;
         image.src = cachedURL;
       } catch {

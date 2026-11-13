@@ -246,15 +246,15 @@ test("clear cancels both queued and active downloads without starting waiting re
   assert.equal((await snapshot(page)).bytes, 0);
 });
 
-test("ten rapid arrow presses cache every visited image and keep the final frame selected", async t => {
+async function startApplication(t, directories = ["A", "B"], count = 11) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "image-compare-queue-test-"));
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=", "base64");
-  for (const dir of ["A", "B"]) {
+  for (const dir of directories) {
     fs.mkdirSync(path.join(fixture, dir));
-    for (let i = 1; i <= 11; i++) fs.writeFileSync(path.join(fixture, dir, `${i}.png`), png);
+    for (let i = 1; i <= count; i++) fs.writeFileSync(path.join(fixture, dir, `${i}.png`), png);
   }
   const child = spawn(process.env.PYTHON || "python3", ["server.py", "--port", "0", "--image-root", fixture], {
-    cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "inherit"]
+    cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "pipe"]
   });
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) {
@@ -263,14 +263,22 @@ test("ten rapid arrow presses cache every visited image and keep the final frame
     }
     fs.rmSync(fixture, {recursive: true, force: true});
   });
-  const appURL = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Application did not start")), 5000);
+  return new Promise((resolve, reject) => {
+    let output = "", errors = "";
+    const timer = setTimeout(() => reject(new Error(`Application did not start: ${errors}`)), 15000);
+    child.stderr.on("data", data => { errors += data; });
+    child.once("exit", code => { clearTimeout(timer); reject(new Error(`Application exited (${code}): ${errors}`)); });
     child.once("error", error => { clearTimeout(timer); reject(error); });
     child.stdout.on("data", data => {
-      const match = data.toString().match(/http:\/\/127\.0\.0\.1:\d+/);
+      output += data;
+      const match = output.match(/http:\/\/127\.0\.0\.1:\d+/);
       if (match) { clearTimeout(timer); resolve(match[0]); }
     });
   });
+}
+
+test("ten rapid arrow presses cache every visited image and keep the final frame selected", async t => {
+  const appURL = await startApplication(t);
   const context = await browser.newContext(); t.after(() => context.close());
   const page = await context.newPage();
   const requests = [], errors = [], gates = [];
@@ -312,6 +320,93 @@ test("ten rapid arrow presses cache every visited image and keep the final frame
   await page.waitForFunction(() => index === 0 && loaded.imageA && loaded.imageB);
   assert.equal(requests.length, 22);
   assert.deepEqual(errors, []);
+});
+
+test("replacing, clearing or hiding a directory cancels only its unfinished downloads", async t => {
+  const appURL = await startApplication(t, ["A", "B", "C", "D", "LQ", "GT", "New"], 6);
+  for (const [action, directory] of [["hide", "C"], ["hide", "D"], ["replace", "A"], ["replace", "LQ"], ["clear", "GT"]]) {
+    await t.test(`${action} ${directory}`, async t => {
+      const context = await browser.newContext(); t.after(() => context.close());
+      const page = await context.newPage();
+      const id = Buffer.from(directory).toString("base64url");
+      const requests = [], failures = [], gates = [];
+      let hold = true;
+      page.on("requestfailed", request => {
+        if (new URL(request.url()).pathname.startsWith("/media/")) failures.push(request.url());
+      });
+      await page.route(`**/media/${id}/**`, async route => {
+        const filename = Buffer.from(new URL(route.request().url()).pathname.split("/").pop(), "base64url").toString();
+        requests.push(filename);
+        if (hold && filename !== "1.png") await new Promise(resolve => gates.push(resolve));
+        await route.continue().catch(() => {}); // An aborted fetch can finish before this gate opens.
+      });
+      const params = new URLSearchParams(["A", "B", "C", "D", "LQ", "GT"].map(key => [key.toLowerCase(), Buffer.from(key).toString("base64url")]));
+      await page.goto(`${appURL}/?${params}`);
+      await page.waitForFunction(() => index === 0 && imageCache.diskCount === 6 && imageCache.pending.size === 0);
+      const savedKey = await page.evaluate(id => [...imageCache.memory.keys()].find(key => new URL(key).pathname.startsWith(`/media/${id}/`)), id);
+      for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(id => [...imageCache.pending.values()].filter(job => job.directoryId === id).length === 5 &&
+        imageCache.downloadQueue.filter(job => new URL(job.key).pathname.startsWith(`/media/${id}/`)).length === 2, id);
+      await assertEventually(() => requests.length === 4);
+      await page.evaluate(id => { window.cancelledJobs = [...imageCache.pending.values()].filter(job => job.directoryId === id); }, id);
+      if (action === "replace") {
+        await page.evaluate(key => { pickerTarget = key; selectDirectory(btoa("New").replace(/=/g, ""), "/New"); }, directory);
+      } else await page.locator(`#${action === "hide" ? "toggle" : "clear"}${directory}`).click();
+      await page.waitForFunction(id => ![...imageCache.pending.values()].some(job => job.directoryId === id) &&
+        !imageCache.downloadQueue.some(job => new URL(job.key).pathname.startsWith(`/media/${id}/`)), id);
+      assert.equal(await page.evaluate(() => cancelledJobs.every(job => job.controller.signal.aborted)), true);
+      hold = false;
+      for (const release of gates) release();
+      await assertEventually(() => failures.length >= 3);
+      assert(failures.every(url => new URL(url).pathname.startsWith(`/media/${id}/`)), "Other directories must not be cancelled");
+      await page.waitForFunction(() => imageCache.pending.size === 0 && loaded.imageA && loaded.imageB);
+      await page.evaluate(() => imageCache.queue);
+      assert.deepEqual(requests, ["1.png", "2.png", "3.png", "4.png"]);
+      assert.deepEqual(await page.evaluate(async key => ({
+        memory: imageCache.memory.has(key), disk: !!await imageCache.shared.disk.match(key)
+      }), savedKey), {memory: true, disk: true});
+      // Showing/reselecting the directory loads only the current frame, not cancelled history.
+      if (action === "hide") await page.locator(`#toggle${directory}`).click();
+      else await page.evaluate(({key, id}) => { pickerTarget = key; selectDirectory(id, `/${key}`); }, {key: directory, id});
+      await page.waitForFunction(id => imageCache.pending.size === 0 && [...imageCache.memory.keys()].some(key => {
+        const parts = new URL(key).pathname.split("/");
+        return parts[2] === id && atob(parts[3]) === "6.png";
+      }), id);
+      assert.deepEqual(requests, ["1.png", "2.png", "3.png", "4.png", "6.png"]);
+    });
+  }
+});
+
+test("hiding one pane retains downloads still used by another pane or reference", async t => {
+  const appURL = await startApplication(t, ["A", "B", "LQ"], 6);
+  for (const directory of ["A", "LQ"]) {
+    await t.test(`C shares ${directory}`, async t => {
+      const context = await browser.newContext(); t.after(() => context.close());
+      const page = await context.newPage();
+      const id = Buffer.from(directory).toString("base64url");
+      const gates = [];
+      let hold = true;
+      await page.route(`**/media/${id}/**`, async route => {
+        const name = Buffer.from(new URL(route.request().url()).pathname.split("/").pop(), "base64url").toString();
+        if (hold && name !== "1.png") await new Promise(resolve => gates.push(resolve));
+        await route.continue();
+      });
+      const params = new URLSearchParams({a: "QQ", b: "Qg", c: id, lq: "TFE"});
+      await page.goto(`${appURL}/?${params}`);
+      await page.waitForFunction(() => imageCache.pending.size === 0 && imageCache.diskCount === 3);
+      for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(id => [...imageCache.pending.values()].filter(job => job.directoryId === id).length === 5 &&
+        imageCache.downloadQueue.filter(job => new URL(job.key).pathname.startsWith(`/media/${id}/`)).length === 2, id);
+      await page.evaluate(id => { window.keptJobs = [...imageCache.pending.values()].filter(job => job.directoryId === id); }, id);
+      await page.locator("#toggleC").click();
+      assert.equal(await page.evaluate(() => keptJobs.every(job => !job.controller.signal.aborted && [...imageCache.pending.values()].includes(job))), true);
+      hold = false;
+      for (const release of gates) release();
+      await page.waitForFunction(() => imageCache.pending.size === 0 && loaded.imageA && loaded.imageB);
+      await page.evaluate(() => imageCache.queue);
+      assert.equal(await page.evaluate(async id => (await imageCache.shared.disk.keys()).filter(key => new URL(key.url).pathname.startsWith(`/media/${id}/`)).length, id), 6);
+    });
+  }
 });
 
 async function assertEventually(predicate) {

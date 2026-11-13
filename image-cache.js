@@ -267,7 +267,7 @@ class LocalImageCache {
     }
   }
 
-  async get(rawURL) {
+  async get(rawURL, directoryId) {
     const key = new URL(rawURL, location.href).href;
     const existing = this.memory.get(key);
     if (existing) {
@@ -281,11 +281,19 @@ class LocalImageCache {
     let job = this.pending.get(key);
     if (!job) {
       const controller = new AbortController();
-      job = { controller, promise: this.load(key, this.epoch, controller.signal) };
+      job = { directoryId, controller, promise: this.load(key, this.epoch, controller.signal) };
       this.pending.set(key, job);
     }
     try { return await job.promise; }
     finally { if (this.pending.get(key) === job) this.pending.delete(key); }
+  }
+
+  retainDirectories(directoryIds) {
+    for (const [key, job] of this.pending) {
+      if (directoryIds.has(job.directoryId)) continue;
+      this.pending.delete(key);
+      job.controller.abort();
+    }
   }
 
   download(key, signal) {
