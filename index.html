@@ -850,8 +850,8 @@
     const imageCache = new LocalImageCache({
       activeKeys: () => new Set(imageNodes.map((image) => image.dataset.cacheKey).filter(Boolean)),
       activeURLs: () => new Set(imageNodes.map((image) => image.src).filter(Boolean)),
-      onStatus: ({ persistent, count, bytes, warning }) => {
-        $("cacheStatus").textContent = `${persistent ? "共享缓存" : "内存缓存"}：${count} 张 · ${formatSize(bytes)}${persistent ? " / 10 GiB" : ""}${warning ? ` · ${warning}` : ""}`;
+      onStatus: ({ persistent, count, bytes, warning, downloading, queued }) => {
+        $("cacheStatus").textContent = `${persistent ? "共享缓存" : "内存缓存"}：${count} 张 · ${formatSize(bytes)}${persistent ? " / 10 GiB" : ""} · 下载中 ${downloading} · 排队中 ${queued}${warning ? ` · ${warning}` : ""}`;
       }
     });
 
@@ -1124,7 +1124,7 @@
     function clearImages() {
       entries = {};
       for (const image of imageNodes) clearImage(image);
-      imageCache.cancelUnused();
+      imageCache.trimMemory();
       render();
     }
 
@@ -1137,7 +1137,7 @@
         hiddenPanes.add(key);
         for (const source of sourceOrder) clearImage(images[source][key]);
         patchCanvases[key].width = patchCanvases[key].height = 0;
-        imageCache.cancelUnused();
+        imageCache.trimMemory();
       }
       updateDirectoryLabels();
       updateURL();

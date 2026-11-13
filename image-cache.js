@@ -193,7 +193,7 @@ class SharedImageCache {
 
 /* Per-page blobs for immediate display; disk bytes and eviction are shared. */
 class LocalImageCache {
-  constructor({ activeKeys, activeURLs, onStatus, diskLimit = 10 * 1024 ** 3, memoryLimit = 128 * 1024 ** 2 }) {
+  constructor({ activeKeys, activeURLs, onStatus, diskLimit = 10 * 1024 ** 3, memoryLimit = 128 * 1024 ** 2, downloadLimit = 3 }) {
     this.activeKeys = activeKeys;
     this.activeURLs = activeURLs;
     this.onStatus = onStatus;
@@ -201,6 +201,9 @@ class LocalImageCache {
     this.memory = new Map();
     this.retiredURLs = new Set();
     this.pending = new Map();
+    this.downloadQueue = [];
+    this.downloading = 0;
+    this.downloadLimit = downloadLimit;
     this.memoryBytes = 0;
     this.diskBytes = 0;
     this.diskCount = 0;
@@ -235,7 +238,8 @@ class LocalImageCache {
 
   status() {
     this.onStatus({ persistent: !!this.disk, count: this.disk ? this.diskCount : this.memory.size,
-      bytes: this.disk ? this.diskBytes : this.memoryBytes, warning: this.warning });
+      bytes: this.disk ? this.diskBytes : this.memoryBytes, warning: this.warning,
+      downloading: this.downloading, queued: this.downloadQueue.length });
   }
 
   track(operation) {
@@ -284,13 +288,36 @@ class LocalImageCache {
     finally { if (this.pending.get(key) === job) this.pending.delete(key); }
   }
 
-  cancelUnused() {
-    const active = this.activeKeys();
-    for (const [key, job] of this.pending) {
-      if (active.has(key)) continue;
-      this.pending.delete(key);
-      job.controller.abort();
+  download(key, signal) {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const job = { key, signal, resolve, reject };
+      job.abort = () => {
+        this.downloadQueue.splice(this.downloadQueue.indexOf(job), 1);
+        reject(signal.reason);
+        this.status();
+      };
+      signal.addEventListener("abort", job.abort, { once: true });
+      this.downloadQueue.push(job);
+      this.startDownloads();
+    });
+  }
+
+  startDownloads() {
+    while (this.downloading < this.downloadLimit && this.downloadQueue.length) {
+      const job = this.downloadQueue.shift();
+      job.signal.removeEventListener("abort", job.abort);
+      this.downloading++;
+      (async () => {
+        const response = await fetch(job.key, { cache: "no-store", signal: job.signal });
+        if (!response.ok) throw new Error(`图片加载失败 (${response.status})`);
+        return response.blob();
+      })().then(job.resolve, job.reject).finally(() => {
+        this.downloading--;
+        this.startDownloads();
+      });
     }
+    this.status();
   }
 
   async load(key, epoch, signal) {
@@ -310,9 +337,7 @@ class LocalImageCache {
     }
     signal.throwIfAborted();
     if (!blob) {
-      const response = await fetch(key, { cache: "no-store", signal });
-      if (!response.ok) throw new Error(`图片加载失败 (${response.status})`);
-      blob = await response.blob();
+      blob = await this.download(key, signal);
       signal.throwIfAborted();
       if (this.disk && generation !== undefined && epoch === this.epoch) {
         this.track(this.shared.write(key, blob, generation));
