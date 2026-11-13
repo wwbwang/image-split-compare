@@ -181,10 +181,18 @@ class ImageCatalog:
 
     def browse(self, directory_id: str, refresh: bool = False) -> dict:
         directory, relative = self.resolve_directory(directory_id)
+        if refresh:
+            self.invalidate([directory_id])
         children = []
+        image_count = 0
         with os.scandir(directory) as entries:
             for entry in entries:
                 if not entry.is_dir(follow_symlinks=False):
+                    if (
+                        Path(entry.name).suffix.lower() in IMAGE_EXTENSIONS
+                        and entry.is_file(follow_symlinks=False)
+                    ):
+                        image_count += 1
                     continue
                 child_relative = (
                     entry.name if relative == "" else f"{relative}/{entry.name}"
@@ -217,7 +225,7 @@ class ImageCatalog:
                 "id": directory_id,
                 "path": relative,
                 "name": directory.name or "/",
-                "imageCount": len(self.directory_index(directory_id, refresh=refresh)),
+                "imageCount": image_count,
             },
             "parentId": (
                 self.encode_id(parent_relative) if parent_relative is not None else None

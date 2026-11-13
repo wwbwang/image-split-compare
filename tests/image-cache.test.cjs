@@ -246,6 +246,41 @@ test("clear cancels both queued and active downloads without starting waiting re
   assert.equal((await snapshot(page)).bytes, 0);
 });
 
+test("a directory request preempts another tab's transfers and resumes every image afterwards", async t => {
+  const context = await browser.newContext(); t.after(() => context.close());
+  const first = await open(context, 100), second = await open(context, 100);
+  await get(first, "cached-during-priority");
+  await first.evaluate(() => {
+    window.results = Promise.all(Array.from({length: 5}, (_, i) => cache.get(`/image/slow-priority-${i}`)));
+  });
+  await assertEventually(() => delayed.has("/image/slow-priority-2"));
+  let releaseMetadata, metadataStarted = false;
+  const metadataGate = new Promise(resolve => { releaseMetadata = resolve; });
+  await second.route("**/directory-priority", async route => {
+    metadataStarted = true;
+    await metadataGate;
+    await route.fulfill({status: 200, body: "directory"});
+  });
+  await second.evaluate(() => {
+    window.metadata = cache.withPriority(() => fetch("/directory-priority", {priority: "high"}).then(response => response.text()));
+  });
+  await assertEventually(() => metadataStarted);
+  assert.equal(await first.evaluate(() => cache.pending.size === 5 &&
+    [...cache.pending.values()].every(job => !job.controller.signal.aborted)), true);
+  for (let i = 0; i < 5; i++) assert.equal(downloads.get(`/image/slow-priority-${i}`) || 0, i < 3 ? 1 : 0);
+  assert.equal(await get(first, "cached-during-priority"), "1234");
+  releaseMetadata();
+  assert.equal(await second.evaluate(() => metadata), "directory");
+  for (let i = 0; i < 5; i++) {
+    const name = `/image/slow-priority-${i}`;
+    await assertEventually(() => downloads.get(name) === (i < 3 ? 2 : 1) && delayed.has(name) && !delayed.get(name).destroyed);
+    delayed.get(name).end("1234");
+    delayed.delete(name);
+  }
+  assert.equal(await first.evaluate(async () => { const result = await results; await cache.queue; return result.length; }), 5);
+  assert.equal((await snapshot(first)).state.count, 6);
+});
+
 async function startApplication(t, directories = ["A", "B"], count = 11) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "image-compare-queue-test-"));
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=", "base64");
@@ -319,6 +354,56 @@ test("ten rapid arrow presses cache every visited image and keep the final frame
   await page.reload();
   await page.waitForFunction(() => index === 0 && loaded.imageA && loaded.imageB);
   assert.equal(requests.length, 22);
+  assert.deepEqual(errors, []);
+});
+
+test("the directory picker pauses transfers, replaces stale browsing, and resumes its queue on close", async t => {
+  const appURL = await startApplication(t, ["A", "B"], 6);
+  const context = await browser.newContext(); t.after(() => context.close());
+  const page = await context.newPage();
+  const mediaGates = [], errors = [];
+  let holdMedia = true, mediaRequests = 0, browseRequests = 0, releaseBrowse;
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto(`${appURL}/?a=QQ&b=Qg`);
+  await page.waitForFunction(() => imageCache.pending.size === 0 && loaded.imageA && loaded.imageB);
+  await page.evaluate(() => imageCache.queue);
+  const root = await page.evaluate(() => selected.A.path.slice(0, selected.A.path.lastIndexOf("/")));
+  await page.route("**/media/**", async route => {
+    mediaRequests++;
+    if (holdMedia) await new Promise(resolve => mediaGates.push(resolve));
+    await route.continue().catch(() => {});
+  });
+  const firstBrowse = new Promise(resolve => { releaseBrowse = resolve; });
+  await page.route("**/api/browse?**", async route => {
+    browseRequests++;
+    if (browseRequests === 1) await firstBrowse;
+    await route.continue().catch(() => {});
+  });
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight");
+  await assertEventually(() => mediaRequests === 3);
+  await page.waitForFunction(() => imageCache.pending.size === 10 && imageCache.downloadQueue.length === 7);
+  await page.locator("#chooseA").click();
+  await assertEventually(() => browseRequests === 1);
+  await page.waitForFunction(() => picker.open && imageCache.pauseDepth > 0 && imageCache.downloading === 0 && imageCache.downloadQueue.length === 10);
+  assert.match(await page.locator("#cacheStatus").innerText(), /目录操作优先/);
+  assert.equal(await page.evaluate(() => [...imageCache.pending.values()].every(job => !job.controller.signal.aborted)), true);
+  await page.locator("#pickerPath").fill(`${root}/B`);
+  await page.locator("#jumpPath").click();
+  await page.waitForFunction(() => pickerData?.current.path === "B");
+  releaseBrowse();
+  await page.locator("#parentDirectory").click();
+  await page.waitForFunction(() => pickerData?.current.id === "root");
+  await page.locator("#refreshDirectories").click();
+  await assertEventually(() => browseRequests === 4);
+  await page.waitForFunction(() => !document.getElementById("pickerStatus").textContent.includes("正在"));
+  assert.equal(mediaRequests, 3, "No picture transfer may restart while the picker is open");
+  holdMedia = false;
+  for (const release of mediaGates) release();
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !picker.open && imageCache.pending.size === 0 && loaded.imageA && loaded.imageB);
+  await page.evaluate(() => imageCache.queue);
+  assert.equal(await page.evaluate(() => imageCache.diskCount), 12);
+  assert.equal(await page.evaluate(() => files[index]), "6.png");
   assert.deepEqual(errors, []);
 });
 

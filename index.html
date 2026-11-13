@@ -842,6 +842,8 @@
     let pickerTarget = null;
     let pickerData = null;
     let pickerVersion = 0;
+    let pickerRequest = null;
+    let resumePickerDownloads = null;
     let mode = "side";
     let patchMode = "side";
     let selection = null;
@@ -850,8 +852,8 @@
     const imageCache = new LocalImageCache({
       activeKeys: () => new Set(imageNodes.map((image) => image.dataset.cacheKey).filter(Boolean)),
       activeURLs: () => new Set(imageNodes.map((image) => image.src).filter(Boolean)),
-      onStatus: ({ persistent, count, bytes, warning, downloading, queued }) => {
-        $("cacheStatus").textContent = `${persistent ? "共享缓存" : "内存缓存"}：${count} 张 · ${formatSize(bytes)}${persistent ? " / 10 GiB" : ""} · 下载中 ${downloading} · 排队中 ${queued}${warning ? ` · ${warning}` : ""}`;
+      onStatus: ({ persistent, count, bytes, warning, downloading, queued, paused }) => {
+        $("cacheStatus").textContent = `${persistent ? "共享缓存" : "内存缓存"}：${count} 张 · ${formatSize(bytes)}${persistent ? " / 10 GiB" : ""} · 下载中 ${downloading} · 排队中 ${queued}${paused ? " · 目录操作优先，图片下载暂停" : ""}${warning ? ` · ${warning}` : ""}`;
       }
     });
 
@@ -1015,11 +1017,13 @@
     }
 
 
-    async function getJSON(url) {
-      const response = await fetch(url);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || response.statusText);
-      return data;
+    async function getJSON(url, signal) {
+      return imageCache.withPriority(async () => {
+        const response = await fetch(url, { priority: "high", signal });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || response.statusText);
+        return data;
+      }, signal);
     }
 
     function directoryQuery() {
@@ -1063,9 +1067,11 @@
 
     async function browse(query, revealDirectoryId) {
       const version = ++pickerVersion;
+      pickerRequest?.abort();
+      const request = pickerRequest = new AbortController();
       $("pickerStatus").textContent = "正在读取目录…";
       try {
-        const data = await getJSON(`/api/browse?${query}`);
+        const data = await getJSON(`/api/browse?${query}`, request.signal);
         if (version !== pickerVersion) return;
         pickerData = data;
         const path = data.current.path ? `${data.root.replace(/\/$/, "")}/${data.current.path}` : data.root;
@@ -1095,12 +1101,13 @@
           revealRow.focus({ preventScroll: true });
         }
       } catch (error) {
-        if (version === pickerVersion) $("pickerStatus").textContent = error.message;
+        if (version === pickerVersion && !request.signal.aborted) $("pickerStatus").textContent = error.message;
       }
     }
 
     function openPicker(target) {
       pickerTarget = target;
+      resumePickerDownloads ||= imageCache.pauseDownloads();
       $("pickerTitle").textContent = `选择图片目录 ${target}`;
       picker.showModal();
       browse(new URLSearchParams({ dir: selected[target]?.id || "root" }));
@@ -1425,6 +1432,12 @@
       };
     }
     $("closePicker").onclick = () => picker.close();
+    picker.addEventListener("close", () => {
+      pickerVersion++;
+      pickerRequest?.abort();
+      resumePickerDownloads?.();
+      resumePickerDownloads = null;
+    });
     $("jumpPath").onclick = () => browse(new URLSearchParams({ path: $("pickerPath").value.trim() }));
     $("pickerPath").onkeydown = (event) => {
       if (event.key === "Enter") {

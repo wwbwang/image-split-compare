@@ -204,6 +204,14 @@ class LocalImageCache {
     this.downloadQueue = [];
     this.downloading = 0;
     this.downloadLimit = downloadLimit;
+    this.activeDownloads = new Set();
+    this.downloadOrder = 0;
+    this.pauseDepth = 0;
+    this.networkLock = "image-compare-network-v1";
+    if (window.BroadcastChannel) {
+      this.networkChannel = new BroadcastChannel(this.networkLock);
+      this.networkChannel.onmessage = () => this.interruptDownloads();
+    }
     this.memoryBytes = 0;
     this.diskBytes = 0;
     this.diskCount = 0;
@@ -239,7 +247,7 @@ class LocalImageCache {
   status() {
     this.onStatus({ persistent: !!this.disk, count: this.disk ? this.diskCount : this.memory.size,
       bytes: this.disk ? this.diskBytes : this.memoryBytes, warning: this.warning,
-      downloading: this.downloading, queued: this.downloadQueue.length });
+      downloading: this.downloading, queued: this.downloadQueue.length, paused: this.pauseDepth > 0 });
   }
 
   track(operation) {
@@ -296,13 +304,45 @@ class LocalImageCache {
     }
   }
 
+  interruptDownloads() {
+    for (const job of this.activeDownloads) {
+      job.interrupted = true;
+      job.controller.abort();
+    }
+  }
+
+  pauseDownloads() {
+    this.pauseDepth++;
+    this.interruptDownloads();
+    this.status();
+    return () => {
+      this.pauseDepth--;
+      this.startDownloads();
+    };
+  }
+
+  async withPriority(action, signal) {
+    const resume = this.pauseDownloads();
+    try {
+      // Enqueue the exclusive lock before asking other tabs to release their transfers.
+      const result = navigator.locks
+        ? navigator.locks.request(this.networkLock, { ...(signal ? { signal } : {}) }, action)
+        : action();
+      this.networkChannel?.postMessage("preempt");
+      return await result;
+    } finally { resume(); }
+  }
+
   download(key, signal) {
     signal.throwIfAborted();
     return new Promise((resolve, reject) => {
-      const job = { key, signal, resolve, reject };
+      const job = { key, signal, resolve, reject, order: this.downloadOrder++ };
       job.abort = () => {
-        this.downloadQueue.splice(this.downloadQueue.indexOf(job), 1);
-        reject(signal.reason);
+        const index = this.downloadQueue.indexOf(job);
+        if (index >= 0) {
+          this.downloadQueue.splice(index, 1);
+          reject(signal.reason);
+        } else job.controller.abort(signal.reason);
         this.status();
       };
       signal.addEventListener("abort", job.abort, { once: true });
@@ -312,15 +352,33 @@ class LocalImageCache {
   }
 
   startDownloads() {
-    while (this.downloading < this.downloadLimit && this.downloadQueue.length) {
+    while (!this.pauseDepth && this.downloading < this.downloadLimit && this.downloadQueue.length) {
       const job = this.downloadQueue.shift();
-      job.signal.removeEventListener("abort", job.abort);
+      job.controller = new AbortController();
+      job.interrupted = false;
+      this.activeDownloads.add(job);
       this.downloading++;
-      (async () => {
-        const response = await fetch(job.key, { cache: "no-store", signal: job.signal });
+      const transfer = async () => {
+        const response = await fetch(job.key, { cache: "no-store", priority: "low", signal: job.controller.signal });
         if (!response.ok) throw new Error(`图片加载失败 (${response.status})`);
         return response.blob();
-      })().then(job.resolve, job.reject).finally(() => {
+      };
+      const result = navigator.locks
+        ? navigator.locks.request(this.networkLock, { mode: "shared", signal: job.controller.signal }, transfer)
+        : transfer();
+      result.then(blob => {
+        job.signal.removeEventListener("abort", job.abort);
+        job.resolve(blob);
+      }, error => {
+        if (job.interrupted && !job.signal.aborted) {
+          this.downloadQueue.push(job);
+          this.downloadQueue.sort((a, b) => a.order - b.order);
+        } else {
+          job.signal.removeEventListener("abort", job.abort);
+          job.reject(error);
+        }
+      }).finally(() => {
+        this.activeDownloads.delete(job);
         this.downloading--;
         this.startDownloads();
       });
