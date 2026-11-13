@@ -626,7 +626,7 @@
       <button id="clearGT" disabled>清除 GT</button>
       <button id="refreshImages" title="重新读取目录和图片版本；图片变化后下载新版">刷新图片</button>
       <button id="clearImageCache" title="清除本机图片缓存，当前显示的图片会保留到下次切换">清除缓存</button>
-      <span class="file-label" id="cacheStatus" style="max-width: none" title="图片保存在当前浏览器的本机存储中，最多约 4 GB">本机缓存初始化中…</span>
+      <span class="file-label" id="cacheStatus" style="max-width: none" title="当前浏览器同一访问地址的所有目录和标签页共用 10 GiB 图片缓存">本机缓存初始化中…</span>
     </div>
   </header>
 
@@ -850,8 +850,8 @@
     const imageCache = new LocalImageCache({
       activeKeys: () => new Set(imageNodes.map((image) => image.dataset.cacheKey).filter(Boolean)),
       activeURLs: () => new Set(imageNodes.map((image) => image.src).filter(Boolean)),
-      onStatus: ({ persistent, count, bytes }) => {
-        $("cacheStatus").textContent = `${persistent ? "本机缓存" : "内存缓存"}：${count} 张 · ${formatSize(bytes)}`;
+      onStatus: ({ persistent, count, bytes, warning }) => {
+        $("cacheStatus").textContent = `${persistent ? "共享缓存" : "内存缓存"}：${count} 张 · ${formatSize(bytes)}${persistent ? " / 10 GiB" : ""}${warning ? ` · ${warning}` : ""}`;
       }
     });
 
