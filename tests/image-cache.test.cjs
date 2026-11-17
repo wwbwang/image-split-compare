@@ -605,6 +605,8 @@ test("visibility menu supports one or zero panes and restores A/B hiding from th
       for (const [i, key] of ["A", "B", "C"].entries()) {
         await setPaneVisible(page, key, false);
         const expected = ["A", "B", "C", "D"].slice(i + 1);
+        assert.equal(await page.locator(`#visible${key}`).isChecked(), false);
+        for (const visible of expected) assert.equal(await page.locator(`#visible${visible}`).isChecked(), true);
         assert.deepEqual(await page.locator("#stage .image-pane:visible").evaluateAll(panes => panes.map(pane => pane.id.slice(4))), expected);
         assert.deepEqual(await page.locator("#patchStage .patch-pane:visible").evaluateAll(panes => panes.map(pane => pane.id.slice(9))), expected);
         assert.equal(await page.locator(`#info${key}`).isVisible(), false);
@@ -631,6 +633,8 @@ test("visibility menu supports one or zero panes and restores A/B hiding from th
       await setPaneVisible(page, "D", true);
       await page.waitForFunction(() => loaded.imageD && imageCache.pending.size === 0);
       assert.deepEqual(await page.evaluate(() => visiblePaneKeys()), ["D"]);
+      for (const key of ["A", "B", "C"]) assert.equal(await page.locator(`#visible${key}`).isChecked(), false);
+      assert.equal(await page.locator("#visibleD").isChecked(), true);
       assert.equal(media.length, 5);
       assert.equal(new URL(page.url()).searchParams.get("hide"), "a,b,c");
       assert.deepEqual(errors, []);

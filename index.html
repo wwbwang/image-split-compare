@@ -146,6 +146,7 @@
     .toolbar-menu-panel label:hover { background: var(--panel-2); }
     .toolbar-menu-panel label:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
     .toolbar-menu-panel input { accent-color: var(--accent); }
+    .toolbar-menu-hint { padding: 6px 10px; font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
     .toolbar-menu-panel hr { border: 0; border-top: 1px solid var(--border); }
 
     .file-label {
@@ -665,6 +666,7 @@
         <details class="toolbar-menu" id="visibilityMenu">
           <summary role="button">显示/隐藏 ▾</summary>
           <div class="toolbar-menu-panel" role="group" aria-label="显示的对比栏">
+            <div class="toolbar-menu-hint">勾选显示，取消勾选隐藏</div>
             <label><input id="visibleA" type="checkbox" aria-controls="paneA patchPaneA infoA" disabled />A</label>
             <label><input id="visibleB" type="checkbox" aria-controls="paneB patchPaneB infoB" disabled />B</label>
             <label><input id="visibleC" type="checkbox" aria-controls="paneC patchPaneC infoC" disabled />C</label>
@@ -1230,9 +1232,9 @@
       imageCache.retainDirectories(new Set(keys.filter((key) => selected[key]).map((key) => selected[key].id)));
     }
 
-    function togglePane(key) {
+    function setPaneVisibility(key, visible) {
       if (!selected[key]) return;
-      if (hiddenPanes.has(key)) {
+      if (visible) {
         hiddenPanes.delete(key);
         setPaneImages(key, requestVersion);
       } else {
@@ -1507,7 +1509,7 @@
 
     $("openPdf").onclick = () => openPicker("PDF");
     for (const key of directoryKeys) $("choose" + key).onclick = () => openPicker(key);
-    for (const key of paneKeys) $("visible" + key).onchange = () => togglePane(key);
+    for (const key of paneKeys) $("visible" + key).onchange = (event) => setPaneVisibility(key, event.target.checked);
     for (const key of directoryKeys) {
       $("clear" + key).onclick = () => {
         selected[key] = null;
