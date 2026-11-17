@@ -73,13 +73,14 @@
     }
 
     .toolbar-primary { flex-wrap: nowrap; }
-    .toolbar-primary > button, .toolbar-primary > details { flex-shrink: 0; }
+    .toolbar-primary > button, .toolbar-actions { flex-shrink: 0; }
     .toolbar-primary .file-label { flex: 0 1 150px; min-width: 0; }
-    .toolbar-primary > details:last-child .toolbar-menu-panel { left: auto; right: 0; }
+    .toolbar-actions { display: flex; gap: 10px; margin-left: auto; }
+    .toolbar-actions > details:last-child .toolbar-menu-panel { left: auto; right: 0; }
+    #cacheStatus { margin-left: auto; max-width: none; text-align: right; }
 
     @media (max-width: 900px) {
       .toolbar-primary { flex-wrap: wrap; }
-      .toolbar-primary > details:last-child .toolbar-menu-panel { left: 0; right: auto; }
     }
 
     .file-btn, button, .select-wrap, .toolbar-menu > summary {
@@ -660,36 +661,37 @@
       <span class="file-label" id="nameC">未选择</span>
       <button class="file-btn" id="chooseD">选择目录 D</button>
       <span class="file-label" id="nameD">未选择</span>
-      <details class="toolbar-menu" id="visibilityMenu">
-        <summary role="button">显示/隐藏 ▾</summary>
-        <div class="toolbar-menu-panel" role="group" aria-label="显示的对比栏">
-          <label><input id="visibleA" type="checkbox" aria-controls="paneA patchPaneA infoA" disabled />A</label>
-          <label><input id="visibleB" type="checkbox" aria-controls="paneB patchPaneB infoB" disabled />B</label>
-          <label><input id="visibleC" type="checkbox" aria-controls="paneC patchPaneC infoC" disabled />C</label>
-          <label><input id="visibleD" type="checkbox" aria-controls="paneD patchPaneD infoD" disabled />D</label>
-        </div>
-      </details>
-      <details class="toolbar-menu" id="clearMenu">
-        <summary role="button">清除 ▾</summary>
-        <div class="toolbar-menu-panel" role="group" aria-label="清除目录或图片缓存">
-          <button id="clearA" aria-label="清除目录 A" disabled>A</button>
-          <button id="clearB" aria-label="清除目录 B" disabled>B</button>
-          <button id="clearC" aria-label="清除目录 C" disabled>C</button>
-          <button id="clearD" aria-label="清除目录 D" disabled>D</button>
-          <button id="clearLQ" aria-label="清除目录 LQ" disabled>LQ</button>
-          <button id="clearGT" aria-label="清除目录 GT" disabled>GT</button>
-          <hr />
-          <button id="clearImageCache" title="清除本机图片缓存，当前显示的图片会保留到下次切换">图片缓存</button>
-        </div>
-      </details>
+      <div class="toolbar-actions">
+        <details class="toolbar-menu" id="visibilityMenu">
+          <summary role="button">显示/隐藏 ▾</summary>
+          <div class="toolbar-menu-panel" role="group" aria-label="显示的对比栏">
+            <label><input id="visibleA" type="checkbox" aria-controls="paneA patchPaneA infoA" disabled />A</label>
+            <label><input id="visibleB" type="checkbox" aria-controls="paneB patchPaneB infoB" disabled />B</label>
+            <label><input id="visibleC" type="checkbox" aria-controls="paneC patchPaneC infoC" disabled />C</label>
+            <label><input id="visibleD" type="checkbox" aria-controls="paneD patchPaneD infoD" disabled />D</label>
+          </div>
+        </details>
+        <details class="toolbar-menu" id="clearMenu">
+          <summary role="button">清除 ▾</summary>
+          <div class="toolbar-menu-panel" role="group" aria-label="清除目录或图片缓存">
+            <button id="clearA" aria-label="清除目录 A" disabled>A</button>
+            <button id="clearB" aria-label="清除目录 B" disabled>B</button>
+            <button id="clearC" aria-label="清除目录 C" disabled>C</button>
+            <button id="clearD" aria-label="清除目录 D" disabled>D</button>
+            <button id="clearLQ" aria-label="清除目录 LQ" disabled>LQ</button>
+            <button id="clearGT" aria-label="清除目录 GT" disabled>GT</button>
+            <hr />
+            <button id="clearImageCache" title="清除本机图片缓存，当前显示的图片会保留到下次切换">图片缓存</button>
+          </div>
+        </details>
+      </div>
     </div>
     <div class="toolbar toolbar-reference">
       <button class="file-btn" id="chooseLQ">选择目录 LQ</button>
       <span class="file-label" id="nameLQ">未选择</span>
       <button class="file-btn" id="chooseGT">选择目录 GT</button>
       <span class="file-label" id="nameGT">未选择</span>
-      <button id="refreshImages" title="重新读取目录和图片版本；图片变化后下载新版">刷新图片</button>
-      <span class="file-label" id="cacheStatus" style="max-width: none" title="当前浏览器同一访问地址的所有目录和标签页共用 10 GiB 图片缓存">本机缓存初始化中…</span>
+      <span class="file-label" id="cacheStatus" title="当前浏览器同一访问地址的所有目录和标签页共用 10 GiB 图片缓存">本机缓存初始化中…</span>
     </div>
   </header>
 
@@ -1546,7 +1548,6 @@
     $("refreshDirectories").onclick = () => browse(new URLSearchParams({ dir: pickerData?.current.id || "root", refresh: "1" }));
     $("previousBtn").onclick = () => move(-1);
     $("nextBtn").onclick = () => move(1);
-    $("refreshImages").onclick = () => loadComparison(files[index]);
     $("clearImageCache").onclick = async () => {
       const button = $("clearImageCache");
       button.disabled = true;
