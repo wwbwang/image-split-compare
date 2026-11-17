@@ -450,7 +450,7 @@ test("top-right PDF picker opens server files without changing image selections"
   await page.evaluate(() => imageCache.queue);
   const before = await page.evaluate(() => ({url: location.href, selected, count: imageCache.diskCount}));
   const button = await page.locator("#openPdf").boundingBox();
-  const toolbar = await page.locator(".toolbar").boundingBox();
+  const toolbar = await page.locator(".toolbar").first().boundingBox();
   assert(button.x + button.width > 1400 && button.y < toolbar.y);
   await page.locator("#openPdf").click();
   await page.waitForFunction(() => pickerData?.current.id === "QQ" && pickerTarget === "PDF");
