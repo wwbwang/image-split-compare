@@ -56,6 +56,18 @@ async function get(page, name) {
     return fetch(url).then(response => response.text());
   }, name);
 }
+async function setPaneVisible(page, key, visible) {
+  if (!await page.locator("#visibilityMenu").evaluate(menu => menu.open)) {
+    await page.locator("#visibilityMenu summary").click();
+  }
+  await page.locator(`#visible${key}`).setChecked(visible);
+}
+async function clearDirectory(page, key) {
+  if (!await page.locator("#clearMenu").evaluate(menu => menu.open)) {
+    await page.locator("#clearMenu summary").click();
+  }
+  await page.locator(`#clear${key}`).click();
+}
 async function snapshot(page) {
   return page.evaluate(async () => {
     const disk = await caches.open("image-compare-local-images-v1");
@@ -485,7 +497,7 @@ test("top-right PDF picker opens server files without changing image selections"
 
 test("replacing, clearing or hiding a directory cancels only its unfinished downloads", async t => {
   const appURL = await startApplication(t, ["A", "B", "C", "D", "LQ", "GT", "New"], 6);
-  for (const [action, directory] of [["hide", "C"], ["hide", "D"], ["replace", "A"], ["replace", "LQ"], ["clear", "GT"]]) {
+  for (const [action, directory] of [["hide", "A"], ["hide", "B"], ["hide", "C"], ["hide", "D"], ["replace", "A"], ["replace", "LQ"], ["clear", "GT"]]) {
     await t.test(`${action} ${directory}`, async t => {
       const context = await browser.newContext(); t.after(() => context.close());
       const page = await context.newPage();
@@ -512,7 +524,8 @@ test("replacing, clearing or hiding a directory cancels only its unfinished down
       await page.evaluate(id => { window.cancelledJobs = [...imageCache.pending.values()].filter(job => job.directoryId === id); }, id);
       if (action === "replace") {
         await page.evaluate(key => { pickerTarget = key; selectDirectory(btoa("New").replace(/=/g, ""), "/New"); }, directory);
-      } else await page.locator(`#${action === "hide" ? "toggle" : "clear"}${directory}`).click();
+      } else if (action === "hide") await setPaneVisible(page, directory, false);
+      else await clearDirectory(page, directory);
       await page.waitForFunction(id => ![...imageCache.pending.values()].some(job => job.directoryId === id) &&
         !imageCache.downloadQueue.some(job => new URL(job.key).pathname.startsWith(`/media/${id}/`)), id);
       assert.equal(await page.evaluate(() => cancelledJobs.every(job => job.controller.signal.aborted)), true);
@@ -520,14 +533,14 @@ test("replacing, clearing or hiding a directory cancels only its unfinished down
       for (const release of gates) release();
       await assertEventually(() => failures.length >= 3);
       assert(failures.every(url => new URL(url).pathname.startsWith(`/media/${id}/`)), "Other directories must not be cancelled");
-      await page.waitForFunction(() => imageCache.pending.size === 0 && loaded.imageA && loaded.imageB);
+      await page.waitForFunction(() => imageCache.pending.size === 0 && visiblePaneKeys().every(key => loaded[images.original[key].id]));
       await page.evaluate(() => imageCache.queue);
       assert.deepEqual(requests, ["1.png", "2.png", "3.png", "4.png"]);
       assert.deepEqual(await page.evaluate(async key => ({
         memory: imageCache.memory.has(key), disk: !!await imageCache.shared.disk.match(key)
       }), savedKey), {memory: true, disk: true});
       // Showing/reselecting the directory loads only the current frame, not cancelled history.
-      if (action === "hide") await page.locator(`#toggle${directory}`).click();
+      if (action === "hide") await setPaneVisible(page, directory, true);
       else await page.evaluate(({key, id}) => { pickerTarget = key; selectDirectory(id, `/${key}`); }, {key: directory, id});
       await page.waitForFunction(id => imageCache.pending.size === 0 && [...imageCache.memory.keys()].some(key => {
         const parts = new URL(key).pathname.split("/");
@@ -559,7 +572,7 @@ test("hiding one pane retains downloads still used by another pane or reference"
       await page.waitForFunction(id => [...imageCache.pending.values()].filter(job => job.directoryId === id).length === 5 &&
         imageCache.downloadQueue.filter(job => new URL(job.key).pathname.startsWith(`/media/${id}/`)).length === 2, id);
       await page.evaluate(id => { window.keptJobs = [...imageCache.pending.values()].filter(job => job.directoryId === id); }, id);
-      await page.locator("#toggleC").click();
+      await setPaneVisible(page, "C", false);
       assert.equal(await page.evaluate(() => keptJobs.every(job => !job.controller.signal.aborted && [...imageCache.pending.values()].includes(job))), true);
       hold = false;
       for (const release of gates) release();
@@ -568,6 +581,95 @@ test("hiding one pane retains downloads still used by another pane or reference"
       assert.equal(await page.evaluate(async id => (await imageCache.shared.disk.keys()).filter(key => new URL(key.url).pathname.startsWith(`/media/${id}/`)).length, id), 6);
     });
   }
+});
+
+test("visibility menu supports one or zero panes and restores A/B hiding from the URL", async t => {
+  const appURL = await startApplication(t, ["A", "B", "C", "D"], 2);
+  for (const mode of ["side", "overlay"]) {
+    await t.test(mode, async t => {
+      const context = await browser.newContext(); t.after(() => context.close());
+      const page = await context.newPage();
+      const errors = [], media = [];
+      page.on("pageerror", error => errors.push(error.message));
+      page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/media/")) media.push(request.url()); });
+      await page.goto(`${appURL}/?a=QQ&b=Qg&c=Qw&d=RA`);
+      await page.waitForFunction(() => imageCache.pending.size === 0 && paneKeys.every(key => loaded[images.original[key].id]));
+      await page.evaluate(() => imageCache.queue);
+      const rect = await page.evaluate(() => { const {left, top, width, height} = imageRect("A"); return {left, top, width, height}; });
+      await page.mouse.move(rect.left + rect.width * 0.2, rect.top + rect.height * 0.2);
+      await page.mouse.down();
+      await page.mouse.move(rect.left + rect.width * 0.8, rect.top + rect.height * 0.8);
+      await page.mouse.up();
+      await page.locator(mode === "side" ? "#modeSide" : "#modeOverlay").click();
+      await page.locator(mode === "side" ? "#patchModeSide" : "#patchModeOverlay").click();
+      for (const [i, key] of ["A", "B", "C"].entries()) {
+        await setPaneVisible(page, key, false);
+        const expected = ["A", "B", "C", "D"].slice(i + 1);
+        assert.deepEqual(await page.locator("#stage .image-pane:visible").evaluateAll(panes => panes.map(pane => pane.id.slice(4))), expected);
+        assert.deepEqual(await page.locator("#patchStage .patch-pane:visible").evaluateAll(panes => panes.map(pane => pane.id.slice(9))), expected);
+        assert.equal(await page.locator(`#info${key}`).isVisible(), false);
+      }
+      assert.equal(await page.locator("#stage .split-lines").isVisible(), false);
+      assert.equal(await page.locator("#patchStage .split-lines").isVisible(), false);
+      assert.equal(await page.evaluate(() => patchCanvases.D.width > 0), true);
+      const pane = await page.locator("#paneD").boundingBox(), stage = await page.locator("#stage").boundingBox();
+      assert(Math.abs(pane.width - stage.width) <= 2, "The single remaining pane should fill the stage");
+      await setPaneVisible(page, "D", false);
+      assert.equal(await page.locator("#stage .image-pane:visible").count(), 0);
+      assert.equal(await page.locator("#patchStage .patch-pane:visible").count(), 0);
+      assert.match(await page.locator("#emptyHint").innerText(), /所有对比栏已隐藏/);
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator("#visibilityMenu").evaluate(menu => menu.open), false);
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(() => index === 1);
+      assert.equal(media.length, 4, "Hidden directories should not download the next frame");
+      assert.equal(new URL(page.url()).searchParams.get("hide"), "a,b,c,d");
+      await page.reload();
+      await page.waitForFunction(() => index === 1 && hiddenPanes.size === 4 && imageCache.diskCount === 4);
+      assert.equal(await page.locator("#stage .image-pane:visible").count(), 0);
+      assert.equal(media.length, 4);
+      await setPaneVisible(page, "D", true);
+      await page.waitForFunction(() => loaded.imageD && imageCache.pending.size === 0);
+      assert.deepEqual(await page.evaluate(() => visiblePaneKeys()), ["D"]);
+      assert.equal(media.length, 5);
+      assert.equal(new URL(page.url()).searchParams.get("hide"), "a,b,c");
+      assert.deepEqual(errors, []);
+    });
+  }
+});
+
+test("one clear menu removes all six directory choices independently of image cache", async t => {
+  const appURL = await startApplication(t, ["A", "B", "C", "D", "LQ", "GT"], 1);
+  const context = await browser.newContext(); t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${appURL}/?a=QQ&b=Qg&c=Qw&d=RA&lq=TFE&gt=R1Q`);
+  await page.waitForFunction(() => imageCache.pending.size === 0 && paneKeys.every(key => loaded[images.original[key].id]));
+  await page.evaluate(() => imageCache.queue);
+  await page.keyboard.press("1");
+  assert.equal(await page.evaluate(() => paneSources.A), "LQ");
+  await clearDirectory(page, "LQ");
+  await page.waitForFunction(() => imageCache.pending.size === 0 && loaded.imageA);
+  assert.equal(await page.evaluate(() => paneSources.A), "original");
+  await setPaneVisible(page, "A", false);
+  await page.locator("#clearMenu summary").click();
+  assert.equal(await page.locator("#visibilityMenu").evaluate(menu => menu.open), false);
+  await page.locator("#clearA").click();
+  assert.equal(await page.locator("#visibleA").isDisabled(), true);
+  assert.equal(await page.locator("#visibleA").isChecked(), false);
+  assert.equal(new URL(page.url()).searchParams.has("a"), false);
+  assert.equal(new URL(page.url()).searchParams.has("hide"), false);
+  for (const key of ["B", "C", "D", "GT"]) await clearDirectory(page, key);
+  assert.equal(await page.evaluate(() => directoryKeys.every(key => !selected[key])), true);
+  assert.equal(await page.evaluate(() => imageCache.diskCount), 6);
+  await page.locator("#visibilityMenu summary").click();
+  for (const key of ["A", "B", "C", "D"]) assert.equal(await page.locator(`#visible${key}`).isDisabled(), true);
+  await page.locator("h1").click();
+  assert.equal(await page.locator("#visibilityMenu").evaluate(menu => menu.open), false);
+  await page.locator("#clearMenu summary").click();
+  for (const key of ["A", "B", "C", "D", "LQ", "GT"]) assert.equal(await page.locator(`#clear${key}`).isDisabled(), true);
+  await page.locator("#clearImageCache").click();
+  await page.waitForFunction(() => imageCache.diskCount === 0 && imageCache.memory.size === 0);
+  assert.equal(await page.locator("#clearMenu").evaluate(menu => menu.open), false);
 });
 
 async function assertEventually(predicate) {
