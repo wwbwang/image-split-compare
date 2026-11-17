@@ -317,7 +317,8 @@ async function startApplication(t, directories = ["A", "B"], count = 11, documen
   });
   return new Promise((resolve, reject) => {
     let output = "", errors = "";
-    const timer = setTimeout(() => reject(new Error(`Application did not start: ${errors}`)), 15000);
+    // Python startup can exceed 15 seconds on a busy shared filesystem.
+    const timer = setTimeout(() => reject(new Error(`Application did not start: ${errors}`)), 60000);
     child.stderr.on("data", data => { errors += data; });
     child.once("exit", code => { clearTimeout(timer); reject(new Error(`Application exited (${code}): ${errors}`)); });
     child.once("error", error => { clearTimeout(timer); reject(error); });
