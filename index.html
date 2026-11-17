@@ -66,6 +66,7 @@
 
     .toolbar {
       display: flex;
+      flex-basis: 100%;
       flex-wrap: wrap;
       gap: 10px;
       align-items: center;
@@ -185,6 +186,8 @@
       outline: 2px solid var(--accent);
       outline-offset: -2px;
     }
+
+    a.directory-item { text-decoration: none; overflow-wrap: anywhere; }
 
     .stage-card, .patch-card, .controls-card, .info-card {
       background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -605,6 +608,7 @@
       <h1>Image Split Compare</h1>
       <p class="subtitle">选择 A、B 开始对比，可加 C、D · 拖动分割线 · 拖拽框选 Patch · <kbd>←</kbd>/<kbd>→</kbd> 切图</p>
     </div>
+    <button id="openPdf" title="浏览远程服务器上的 PDF，在新标签页打开">打开 PDF ↗</button>
     <div class="toolbar">
       <button class="file-btn" id="chooseA">选择目录 A</button>
       <span class="file-label" id="nameA">未选择</span>
@@ -843,6 +847,7 @@
     let pickerData = null;
     let pickerVersion = 0;
     let pickerRequest = null;
+    let pdfDirectory = null;
     let resumePickerDownloads = null;
     let mode = "side";
     let patchMode = "side";
@@ -1067,6 +1072,8 @@
 
     async function browse(query, revealDirectoryId) {
       const version = ++pickerVersion;
+      const pdf = pickerTarget === "PDF";
+      if (pdf) query.set("kind", "pdf");
       pickerRequest?.abort();
       const request = pickerRequest = new AbortController();
       $("pickerStatus").textContent = "正在读取目录…";
@@ -1074,17 +1081,20 @@
         const data = await getJSON(`/api/browse?${query}`, request.signal);
         if (version !== pickerVersion) return;
         pickerData = data;
+        if (pdf) pdfDirectory = data.current.id;
         const path = data.current.path ? `${data.root.replace(/\/$/, "")}/${data.current.path}` : data.root;
         $("pickerPath").value = path;
         $("parentDirectory").disabled = data.parentId === null;
-        $("pickerStatus").textContent = `${path} · ${data.current.imageCount} 张直接图片 · ${data.directories.length} 个子目录`;
+        $("pickerStatus").textContent = `${path} · ${pdf ? `${data.pdfs.length} 个 PDF 文件` : `${data.current.imageCount} 张直接图片`} · ${data.directories.length} 个子目录`;
         const list = $("directoryList");
         list.replaceChildren();
-        const select = document.createElement("button");
-        select.className = "directory-item primary";
-        select.textContent = `选择当前目录：${path}`;
-        select.onclick = () => selectDirectory(data.current.id, path);
-        list.append(select);
+        if (!pdf) {
+          const select = document.createElement("button");
+          select.className = "directory-item primary";
+          select.textContent = `选择当前目录：${path}`;
+          select.onclick = () => selectDirectory(data.current.id, path);
+          list.append(select);
+        }
         let revealRow = null;
         for (const directory of data.directories) {
           const button = document.createElement("button");
@@ -1093,6 +1103,23 @@
           button.onclick = () => browse(new URLSearchParams({ dir: directory.id }));
           list.append(button);
           if (directory.id === revealDirectoryId) revealRow = button;
+        }
+        if (pdf) {
+          for (const file of data.pdfs) {
+            const link = document.createElement("a");
+            link.className = "file-btn directory-item";
+            link.textContent = `${file.name} ↗`;
+            link.href = `/pdf/${data.current.id}/${file.nameId}`;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            list.append(link);
+          }
+          if (!data.pdfs.length) {
+            const hint = document.createElement("p");
+            hint.className = "picker-status";
+            hint.textContent = "当前目录没有 PDF 文件，可进入子目录或输入其他目录路径。";
+            list.append(hint);
+          }
         }
         list.scrollTop = 0;
         if (revealRow && picker.open) {
@@ -1107,10 +1134,12 @@
 
     function openPicker(target) {
       pickerTarget = target;
+      const pdf = target === "PDF";
       resumePickerDownloads ||= imageCache.pauseDownloads();
-      $("pickerTitle").textContent = `选择图片目录 ${target}`;
+      $("pickerTitle").textContent = pdf ? "打开服务器 PDF" : `选择图片目录 ${target}`;
+      $("pickerPath").placeholder = pdf ? "服务器目录绝对路径，如 /mnt/papers" : "容器内绝对路径，如 /mnt/images/A";
       picker.showModal();
-      browse(new URLSearchParams({ dir: selected[target]?.id || "root" }));
+      browse(new URLSearchParams({ dir: (pdf ? pdfDirectory || selected.A?.id : selected[target]?.id) || "root" }));
     }
 
     function selectDirectory(id, path) {
@@ -1410,6 +1439,7 @@
       }
     }
 
+    $("openPdf").onclick = () => openPicker("PDF");
     for (const key of directoryKeys) $("choose" + key).onclick = () => openPicker(key);
     for (const key of optionalPanes) {
       $("toggle" + key).onclick = () => togglePane(key);

@@ -24,7 +24,7 @@ before(async () => {
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ headless: true,
+  browser = await chromium.launch({ headless: true, args: ["--headless=new"],
     ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
 });
 after(async () => {
@@ -281,12 +281,17 @@ test("a directory request preempts another tab's transfers and resumes every ima
   assert.equal((await snapshot(first)).state.count, 6);
 });
 
-async function startApplication(t, directories = ["A", "B"], count = 11) {
+async function startApplication(t, directories = ["A", "B"], count = 11, documents = {}) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "image-compare-queue-test-"));
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=", "base64");
   for (const dir of directories) {
     fs.mkdirSync(path.join(fixture, dir));
     for (let i = 1; i <= count; i++) fs.writeFileSync(path.join(fixture, dir, `${i}.png`), png);
+  }
+  for (const [name, bytes] of Object.entries(documents)) {
+    const file = path.join(fixture, name);
+    fs.mkdirSync(path.dirname(file), {recursive: true});
+    fs.writeFileSync(file, bytes);
   }
   const child = spawn(process.env.PYTHON || "python3", ["server.py", "--port", "0", "--image-root", fixture], {
     cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "pipe"]
@@ -404,6 +409,77 @@ test("the directory picker pauses transfers, replaces stale browsing, and resume
   await page.evaluate(() => imageCache.queue);
   assert.equal(await page.evaluate(() => imageCache.diskCount), 12);
   assert.equal(await page.evaluate(() => files[index]), "6.png");
+  assert.deepEqual(errors, []);
+});
+
+test("top-right PDF picker opens server files without changing image selections", async t => {
+  const stream = "BT /F1 18 Tf 20 100 Td (PDF preview test) Tj ET";
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 160] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+  let document = "%PDF-1.4\n";
+  const offsets = objects.map((object, index) => {
+    const offset = Buffer.byteLength(document);
+    document += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const xref = Buffer.byteLength(document);
+  document += `xref\n0 6\n0000000000 65535 f \n${offsets.map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const appURL = await startApplication(t, ["A", "B"], 1, {
+    "papers/论文 2.PDF": document, "papers/论文 10.pdf": document, "papers/notes.txt": "notes"
+  });
+  const context = await browser.newContext({viewport: {width: 1440, height: 1000}});
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto(`${appURL}/?a=QQ&b=Qg`);
+  await page.waitForFunction(() => loaded.imageA && loaded.imageB);
+  await page.evaluate(() => imageCache.queue);
+  const before = await page.evaluate(() => ({url: location.href, selected, count: imageCache.diskCount}));
+  const button = await page.locator("#openPdf").boundingBox();
+  const toolbar = await page.locator(".toolbar").boundingBox();
+  assert(button.x + button.width > 1400 && button.y < toolbar.y);
+  await page.locator("#openPdf").click();
+  await page.waitForFunction(() => pickerData?.current.id === "QQ" && pickerTarget === "PDF");
+  assert.equal(await page.locator("#pickerTitle").innerText(), "打开服务器 PDF");
+  await page.locator("#directoryList .picker-status").waitFor();
+  assert.equal(await page.evaluate(() => imageCache.pauseDepth > 0), true);
+  const root = await page.evaluate(() => pickerData.root);
+  await page.locator("#pickerPath").fill(`${root}/papers`);
+  await page.locator("#jumpPath").click();
+  await page.waitForFunction(() => pickerData?.current.path === "papers");
+  assert.deepEqual(await page.locator("#directoryList a").allTextContents(), ["论文 2.PDF ↗", "论文 10.pdf ↗"]);
+  const link = page.locator("#directoryList a").first();
+  const url = await link.getAttribute("href");
+  const response = await context.request.get(`${appURL}${url}`, {headers: {Range: "bytes=0-7"}});
+  assert.equal(response.status(), 206);
+  assert.equal((await response.body()).toString(), "%PDF-1.4");
+  assert.equal(response.headers()["content-type"], "application/pdf");
+  assert.equal(await link.getAttribute("target"), "_blank");
+  assert.match(await link.getAttribute("rel"), /noopener/);
+  const popupEvent = context.waitForEvent("page");
+  await link.click();
+  const popup = await popupEvent;
+  await popup.waitForURL(`${appURL}${url}`);
+  await popup.close();
+  await page.bringToFront();
+  await page.locator("#parentDirectory").click();
+  await page.waitForFunction(() => pickerData?.current.id === "root");
+  await page.getByRole("button", {name: "📁 papers", exact: true}).click();
+  await page.waitForFunction(() => pickerData?.current.path === "papers");
+  await page.locator("#refreshDirectories").click();
+  await page.waitForFunction(() => !document.getElementById("pickerStatus").textContent.includes("正在"));
+  await page.locator("#closePicker").click();
+  await page.waitForFunction(() => !picker.open && imageCache.pauseDepth === 0);
+  assert.deepEqual(await page.evaluate(() => ({url: location.href, selected, count: imageCache.diskCount})), before);
+  await page.locator("#openPdf").click();
+  await page.waitForFunction(() => pickerData?.current.path === "papers");
+  await page.keyboard.press("Escape");
+  await page.locator("#chooseA").click();
+  await page.waitForFunction(() => pickerTarget === "A" && pickerData?.current.id === "QQ");
+  assert.equal(await page.locator("#directoryList a").count(), 0);
+  assert.equal(await page.getByRole("button", {name: /^选择当前目录/}).count(), 1);
   assert.deepEqual(errors, []);
 });
 

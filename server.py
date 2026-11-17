@@ -20,6 +20,7 @@ IMAGE_CACHE_PATH = APP_DIR / "image-cache.js"
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 MEDIA_RE = re.compile(r"^/media/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$")
+PDF_RE = re.compile(r"^/pdf/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$")
 ROOT_ID = "root"
 CHUNK_SIZE = 1024 * 1024
 
@@ -111,10 +112,20 @@ class ImageCatalog:
             or len(pure_name.parts) != 1
             or name in {".", ".."}
         ):
-            raise CatalogError("Image name must be one direct basename.")
+            raise CatalogError("File name must be one direct basename.")
 
     def resolve_image(
         self, directory_id: str, name_id: str
+    ) -> tuple[Path, str, str]:
+        return self.resolve_file(directory_id, name_id, IMAGE_EXTENSIONS)
+
+    def resolve_pdf(
+        self, directory_id: str, name_id: str
+    ) -> tuple[Path, str, str]:
+        return self.resolve_file(directory_id, name_id, {".pdf"})
+
+    def resolve_file(
+        self, directory_id: str, name_id: str, extensions: set[str]
     ) -> tuple[Path, str, str]:
         directory, relative_directory = self.resolve_directory(directory_id)
         name = self.decode_id(name_id)
@@ -122,15 +133,15 @@ class ImageCatalog:
         try:
             path = (directory / name).resolve(strict=True)
         except (FileNotFoundError, RuntimeError) as error:
-            raise CatalogError("Image does not exist.") from error
+            raise CatalogError("File does not exist.") from error
         if (
             not path.is_relative_to(self.root)
             or path.parent != directory
             or path.name != name
             or not path.is_file()
-            or path.suffix.lower() not in IMAGE_EXTENSIONS
+            or path.suffix.lower() not in extensions
         ):
-            raise CatalogError("Requested path is not a supported direct image.")
+            raise CatalogError("Requested path is not a supported direct file.")
         return path, relative_directory, name
 
     def invalidate(self, directory_ids: list[str] | None = None) -> None:
@@ -179,15 +190,18 @@ class ImageCatalog:
         self.directory_index(directory_id, refresh=refresh)
         return self._index_cache[directory_id][2]
 
-    def browse(self, directory_id: str, refresh: bool = False) -> dict:
+    def browse(self, directory_id: str, refresh: bool = False, *, pdf: bool = False) -> dict:
         directory, relative = self.resolve_directory(directory_id)
         if refresh:
             self.invalidate([directory_id])
         children = []
+        pdfs = []
         image_count = 0
         with os.scandir(directory) as entries:
             for entry in entries:
                 if not entry.is_dir(follow_symlinks=False):
+                    if pdf and Path(entry.name).suffix.lower() == ".pdf" and entry.is_file(follow_symlinks=False):
+                        pdfs.append({"name": entry.name, "nameId": self.encode_id(entry.name)})
                     if (
                         Path(entry.name).suffix.lower() in IMAGE_EXTENSIONS
                         and entry.is_file(follow_symlinks=False)
@@ -201,6 +215,7 @@ class ImageCatalog:
                     {"id": self.encode_id(child_relative), "name": entry.name}
                 )
         children.sort(key=lambda item: natural_key(item["name"]))
+        pdfs.sort(key=lambda item: natural_key(item["name"]))
 
         breadcrumbs = [{"id": ROOT_ID, "name": self.root.name or "/", "path": ""}]
         if relative:
@@ -232,6 +247,7 @@ class ImageCatalog:
             ),
             "breadcrumbs": breadcrumbs,
             "directories": children,
+            "pdfs": pdfs,
         }
 
     def compare(self, directory_ids: list[str], refresh: bool = False) -> dict:
@@ -345,6 +361,7 @@ def make_handler(catalog: ImageCatalog, index_path: Path = INDEX_PATH):
                     lambda: catalog.browse(
                         catalog.id_for_path(raw_path) if raw_path is not None else directory_id,
                         refresh=refresh,
+                        pdf=(query.get("kind") or [""])[0] == "pdf",
                     ),
                     head_only,
                 )
@@ -372,6 +389,12 @@ def make_handler(catalog: ImageCatalog, index_path: Path = INDEX_PATH):
                     )
                 return
 
+            pdf_match = PDF_RE.fullmatch(path)
+            if pdf_match:
+                self._send_media(
+                    pdf_match.group(1), pdf_match.group(2), head_only=head_only, pdf=True
+                )
+                return
             media_match = MEDIA_RE.fullmatch(path)
             if media_match:
                 self._send_media(
@@ -393,34 +416,61 @@ def make_handler(catalog: ImageCatalog, index_path: Path = INDEX_PATH):
                 self._send_json(HTTPStatus.OK, payload, head_only=head_only)
 
         def _send_media(
-            self, directory_id: str, name_id: str, head_only: bool
+            self, directory_id: str, name_id: str, head_only: bool, pdf: bool = False
         ) -> None:
             try:
-                path, _, name = catalog.resolve_image(directory_id, name_id)
-            except CatalogError as error:
+                resolver = catalog.resolve_pdf if pdf else catalog.resolve_image
+                path, _, name = resolver(directory_id, name_id)
+                media_file = path.open("rb")
+            except (CatalogError, OSError) as error:
                 self._send_json(
                     HTTPStatus.NOT_FOUND, {"error": str(error)}, head_only=head_only
                 )
                 return
-            size = path.stat().st_size
-            content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(size))
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header(
-                "Content-Disposition", f"inline; filename*=UTF-8''{quote(name)}"
-            )
-            self.end_headers()
-            if head_only:
-                return
-            try:
-                with path.open("rb") as image_file:
-                    while chunk := image_file.read(CHUNK_SIZE):
+            with media_file:
+                size = os.fstat(media_file.fileno()).st_size
+                start, end = 0, size - 1
+                range_header = self.headers.get("Range") if pdf and not head_only else None
+                if range_header:
+                    match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+                    if match and any(match.groups()):
+                        first, last = match.groups()
+                        if first:
+                            start = int(first)
+                            end = min(int(last), end) if last else end
+                        else:
+                            start = max(0, size - int(last))
+                    if not match or not any(match.groups()) or start > end or start >= size:
+                        self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                        self.send_header("Content-Range", f"bytes */{size}")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                length = max(0, end - start + 1)
+                content_type = "application/pdf" if pdf else mimetypes.guess_type(name)[0] or "application/octet-stream"
+                self.send_response(HTTPStatus.PARTIAL_CONTENT if range_header else HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(length))
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(name)}")
+                if pdf:
+                    self.send_header("Accept-Ranges", "bytes")
+                if range_header:
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                self.end_headers()
+                if head_only:
+                    return
+                try:
+                    media_file.seek(start)
+                    while length > 0:
+                        chunk = media_file.read(min(CHUNK_SIZE, length))
+                        if not chunk:
+                            break
                         self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                return
+                        length -= len(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
         def _send_json(self, status, payload, head_only: bool = False) -> None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
